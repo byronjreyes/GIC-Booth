@@ -1,0 +1,10 @@
+src-tauri/
+node_modules/
+dist/
+.git/
+.shares/
+*.log
+.*.log
+.impeccable/
+.preview-qr*
+.tunnel*
