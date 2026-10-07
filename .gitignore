@@ -1,0 +1,17 @@
+node_modules/
+dist/
+src-tauri/target/
+.shares/
+*.log
+.*.log
+.tunnel*
+.preview-qr*
+gic-share-mobile.png
+qr-mobile-check.png
+.env
+.env.local
+.env.*.local
+.vercel
+.impeccable/
+.DS_Store
+Thumbs.db
