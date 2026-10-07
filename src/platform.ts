@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { queueForSync } from './sync'
+import { getSupabaseClient, isSupabaseConfigured } from './supabase'
 
 export type Metadata = Record<string, string | number | boolean>
 export type StoredEvent = { sessionId: string; eventType: string; metadata: Metadata; createdAt: string }
@@ -129,46 +130,120 @@ export async function recordEvent(sessionId: string, eventType: string, metadata
     localStorage.setItem(STORAGE_KEY, JSON.stringify(events))
   }
 
-  // Queue for cloud sync
+  // Queue event for cloud sync
   queueForSync('event', `${sessionId}-${Date.now()}`, {
     sessionId,
     eventType,
     metadata,
     createdAt,
   })
+
+  // Queue/update session record for cloud sync
+  try {
+    const allEvents = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as StoredEvent[]
+    const sessionEvents = allEvents.filter(e => e.sessionId === sessionId)
+    if (sessionEvents.length > 0) {
+      const layoutEvent = sessionEvents.find(i => i.eventType === 'layout_selected')
+      const themeEvent = sessionEvents.find(i => i.eventType === 'theme_selected')
+      const isCompleted = sessionEvents.some(item => item.eventType === 'session_completed')
+      const isAbandoned = sessionEvents.some(item => item.eventType === 'session_abandoned')
+      const captures = sessionEvents.filter(item => item.eventType === 'capture_completed').reduce((total, item) => total + Number(item.metadata.count ?? 0), 0)
+      const downloaded = sessionEvents.some(item => item.eventType === 'download_completed')
+      const printed = sessionEvents.some(item => item.eventType === 'print_requested')
+      const status = isCompleted ? 'Completed' : isAbandoned ? 'Abandoned' : 'Active'
+
+      queueForSync('session', sessionId, {
+        id: sessionId,
+        startedAt: sessionEvents[0].createdAt,
+        completedAt: isCompleted || isAbandoned ? createdAt : null,
+        layoutId: (layoutEvent?.metadata.layout as string) || (metadata.layout as string) || 'classic-4',
+        themeId: (themeEvent?.metadata.theme as string) || (metadata.theme as string) || null,
+        captureCount: captures,
+        status,
+        downloaded,
+        printed,
+      })
+    }
+  } catch {
+    // Non-blocking
+  }
 }
 
 export async function getEventCounts(range: DateRangeFilter = 'all') {
-  if (isTauri() && range === 'all') {
+  const localEvents = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as StoredEvent[]
+  const eventMap = new Map<string, { eventType: string; createdAt: string }>()
+  localEvents.forEach((e, idx) => eventMap.set(`local-${idx}-${e.sessionId}-${e.eventType}`, { eventType: e.eventType, createdAt: e.createdAt }))
+
+  if (isSupabaseConfigured() && navigator.onLine) {
     try {
-      return await invoke<{ eventType: string; count: number }[]>('event_counts')
+      const client = getSupabaseClient()
+      if (client) {
+        const { data, error } = await client.from('events').select('session_id, event_type, created_at')
+        if (!error && data && data.length > 0) {
+          data.forEach(d => {
+            eventMap.set(`cloud-${d.session_id}-${d.event_type}-${d.created_at}`, {
+              eventType: d.event_type,
+              createdAt: d.created_at,
+            })
+          })
+        }
+      }
     } catch {
-      // fall back to localStorage
+      // fallback to local
     }
   }
-  const events = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as StoredEvent[]
-  const filtered = events.filter(e => isDateInRange(e.createdAt, range))
+
+  const allEvents = [...eventMap.values()]
+  const filtered = allEvents.filter(e => isDateInRange(e.createdAt, range))
   const counts = new Map<string, number>()
   filtered.forEach(event => counts.set(event.eventType, (counts.get(event.eventType) ?? 0) + 1))
   return [...counts].map(([eventType, count]) => ({ eventType, count }))
 }
 
 export async function getSessionHistory(range: DateRangeFilter = 'all', statusFilter = 'all'): Promise<SessionSummary[]> {
-  let allSummaries: SessionSummary[] = []
-  if (isTauri() && range === 'all' && statusFilter === 'all') {
+  let cloudSummaries: SessionSummary[] = []
+  if (isSupabaseConfigured() && navigator.onLine) {
     try {
-      allSummaries = await invoke<SessionSummary[]>('session_history')
-    } catch {
-      allSummaries = []
+      const client = getSupabaseClient()
+      if (client) {
+        const { data: cloudSessions, error } = await client
+          .from('sessions')
+          .select('*')
+          .order('started_at', { ascending: false })
+        if (!error && cloudSessions) {
+          cloudSummaries = cloudSessions.map(cs => ({
+            sessionId: cs.id,
+            startedAt: cs.started_at,
+            lastEventAt: cs.completed_at || cs.started_at,
+            layoutId: cs.layout_id || undefined,
+            themeId: cs.theme_id || undefined,
+            captures: Number(cs.capture_count ?? 0),
+            downloaded: Boolean(cs.downloaded),
+            printed: Boolean(cs.printed),
+            status: (cs.status as 'Completed' | 'Abandoned' | 'Active') || 'Active',
+          }))
+        }
+      }
+    } catch (err) {
+      console.warn('Supabase session fetch skipped:', err)
     }
   }
 
-  if (allSummaries.length === 0) {
+  let localSummaries: SessionSummary[] = []
+  if (isTauri() && range === 'all' && statusFilter === 'all') {
+    try {
+      localSummaries = await invoke<SessionSummary[]>('session_history')
+    } catch {
+      localSummaries = []
+    }
+  }
+
+  if (localSummaries.length === 0) {
     const events = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as StoredEvent[]
     const sessions = new Map<string, StoredEvent[]>()
     events.forEach(event => sessions.set(event.sessionId, [...(sessions.get(event.sessionId) ?? []), event]))
 
-    allSummaries = [...sessions].map(([sessionId, items]) => {
+    localSummaries = [...sessions].map(([sessionId, items]) => {
       const layoutEvent = items.find(i => i.eventType === 'layout_selected')
       const themeEvent = items.find(i => i.eventType === 'theme_selected')
       const isCompleted = items.some(item => item.eventType === 'session_completed')
@@ -187,7 +262,11 @@ export async function getSessionHistory(range: DateRangeFilter = 'all', statusFi
     })
   }
 
-  return allSummaries
+  const merged = new Map<string, SessionSummary>()
+  for (const s of localSummaries) merged.set(s.sessionId, s)
+  for (const s of cloudSummaries) merged.set(s.sessionId, s)
+
+  return [...merged.values()]
     .filter(session => isDateInRange(session.startedAt, range))
     .filter(session => statusFilter === 'all' || session.status.toLowerCase() === statusFilter.toLowerCase())
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
@@ -208,24 +287,49 @@ export interface AnalyticsReport {
 
 export async function getAnalyticsReport(range: DateRangeFilter = '7days'): Promise<AnalyticsReport> {
   const sessions = await getSessionHistory(range)
-  const events = (JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as StoredEvent[])
-    .filter(e => isDateInRange(e.createdAt, range))
+  let events = (JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as StoredEvent[])
 
+  if (isSupabaseConfigured() && navigator.onLine) {
+    try {
+      const client = getSupabaseClient()
+      if (client) {
+        const { data, error } = await client.from('events').select('*')
+        if (!error && data && data.length > 0) {
+          const cloudEvents: StoredEvent[] = data.map(d => ({
+            sessionId: d.session_id,
+            eventType: d.event_type,
+            metadata: (d.metadata || {}) as Metadata,
+            createdAt: d.created_at,
+          }))
+          const existingKeys = new Set(events.map(e => `${e.sessionId}-${e.eventType}-${e.createdAt}`))
+          for (const ce of cloudEvents) {
+            if (!existingKeys.has(`${ce.sessionId}-${ce.eventType}-${ce.createdAt}`)) {
+              events.push(ce)
+            }
+          }
+        }
+      }
+    } catch {
+      // fallback
+    }
+  }
+
+  const filteredEvents = events.filter(e => isDateInRange(e.createdAt, range))
   const sessionsTotal = sessions.length
   const completedTotal = sessions.filter(s => s.status === 'Completed').length
   const abandonedTotal = sessions.filter(s => s.status === 'Abandoned').length
   const completionRate = sessionsTotal > 0 ? Math.round((completedTotal / sessionsTotal) * 100) : 0
 
-  const capturesTotal = events
+  const capturesTotal = filteredEvents
     .filter(e => e.eventType === 'capture_completed')
     .reduce((sum, e) => sum + Number(e.metadata.count ?? 0), 0)
 
-  const downloadsTotal = events.filter(e => e.eventType === 'download_completed').length
-  const printsTotal = events.filter(e => e.eventType === 'print_requested').length
+  const downloadsTotal = filteredEvents.filter(e => e.eventType === 'download_completed').length
+  const printsTotal = filteredEvents.filter(e => e.eventType === 'print_requested').length
 
   // Popular themes
   const themeMap = new Map<string, number>()
-  events.filter(e => e.eventType === 'theme_selected').forEach(e => {
+  filteredEvents.filter(e => e.eventType === 'theme_selected').forEach(e => {
     const t = String(e.metadata.theme ?? 'Unknown')
     themeMap.set(t, (themeMap.get(t) ?? 0) + 1)
   })
@@ -236,7 +340,7 @@ export async function getAnalyticsReport(range: DateRangeFilter = '7days'): Prom
 
   // Popular layouts
   const layoutMap = new Map<string, number>()
-  events.filter(e => e.eventType === 'layout_selected').forEach(e => {
+  filteredEvents.filter(e => e.eventType === 'layout_selected').forEach(e => {
     const l = String(e.metadata.layout ?? 'Unknown')
     layoutMap.set(l, (layoutMap.get(l) ?? 0) + 1)
   })
@@ -271,6 +375,7 @@ export async function getAnalyticsReport(range: DateRangeFilter = '7days'): Prom
     sessionsByDay,
   }
 }
+
 
 export async function listThemes(): Promise<StoredTheme[]> {
   if (isTauri()) {

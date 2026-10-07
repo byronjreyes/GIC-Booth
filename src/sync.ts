@@ -102,6 +102,18 @@ export async function runSync(force = false): Promise<boolean> {
 
   try {
     const queue = getLocalQueue()
+    // 0. Update booth heartbeat
+    try {
+      await client.from('booths').upsert({
+        id: 'booth-01',
+        name: 'GIC Booth Main',
+        last_seen_at: new Date().toISOString(),
+        active: true,
+      })
+    } catch {
+      // Non-blocking heartbeat
+    }
+
     const remainingQueue: SyncQueueItem[] = []
 
     // 1. Flush queued items to Supabase
@@ -109,6 +121,7 @@ export async function runSync(force = false): Promise<boolean> {
       try {
         if (item.entityType === 'event') {
           const { error } = await client.from('events').insert({
+            booth_id: 'booth-01',
             session_id: item.payload.sessionId,
             event_type: item.payload.eventType,
             metadata: item.payload.metadata ?? {},
@@ -118,6 +131,7 @@ export async function runSync(force = false): Promise<boolean> {
         } else if (item.entityType === 'session') {
           const { error } = await client.from('sessions').upsert({
             id: item.entityId,
+            booth_id: 'booth-01',
             started_at: item.payload.startedAt,
             completed_at: item.payload.completedAt,
             layout_id: item.payload.layoutId ?? 'classic-4',

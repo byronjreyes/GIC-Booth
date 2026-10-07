@@ -47,7 +47,7 @@ import {
   type StoredTheme,
 } from './platform'
 import { getSyncStatus, initSyncEngine, runSync, subscribeSyncStatus, type SyncStatus } from './sync'
-import { getSupabaseCredentials, isSupabaseConfigured, saveSupabaseCredentials, uploadThemeAsset } from './supabase'
+import { getSupabaseCredentials, isSupabaseConfigured, saveSupabaseCredentials, uploadThemeAsset, testSupabaseConnection } from './supabase'
 
 type AdminTab = 'dashboard' | 'analytics' | 'sessions' | 'designs' | 'printer' | 'camera' | 'settings'
 
@@ -355,10 +355,16 @@ function DashboardView({
             </div>
             <div className="status-row">
               <span>Cloud Sync (Supabase)</span>
-              <strong className={isSupabaseConfigured() ? 'badge-ok' : 'badge-warn'}>
-                {isSupabaseConfigured() ? 'Connected' : 'Needs Config'}
+              <strong className={!isSupabaseConfigured() ? 'badge-warn' : syncStatus.state === 'error' ? 'badge-warn' : 'badge-ok'}>
+                {!isSupabaseConfigured() ? 'Needs Config' : syncStatus.state === 'error' ? 'Sync Error' : syncStatus.state === 'syncing' ? 'Syncing...' : 'Connected (Live)'}
               </strong>
             </div>
+            {syncStatus.lastError && (
+              <div className="status-row" style={{ color: '#ef4444', fontSize: '0.8rem' }}>
+                <span>Sync Note</span>
+                <span>{syncStatus.lastError}</span>
+              </div>
+            )}
             <div className="status-row">
               <span>Pending Offline Queue</span>
               <strong>{syncStatus.pendingCount} items</strong>
@@ -1041,6 +1047,22 @@ function SettingsView({
   const [formData, setFormData] = useState<BoothSettings>(settings)
   const [supabaseCreds, setSupabaseCreds] = useState(getSupabaseCredentials)
   const [notice, setNotice] = useState('')
+  const [testingStatus, setTestingStatus] = useState<{
+    loading: boolean
+    result?: { success: boolean; message: string; details?: { sessionsCount: number; eventsCount: number; themesCount: number } }
+  }>({ loading: false })
+
+  const handleTestConnection = async () => {
+    if (supabaseCreds.url.trim() && supabaseCreds.anonKey.trim()) {
+      saveSupabaseCredentials(supabaseCreds.url, supabaseCreds.anonKey)
+    }
+    setTestingStatus({ loading: true })
+    const res = await testSupabaseConnection()
+    setTestingStatus({ loading: false, result: res })
+    if (res.success) {
+      onManualSync()
+    }
+  }
 
   const handleSaveAll = (e: FormEvent) => {
     e.preventDefault()
@@ -1163,9 +1185,29 @@ function SettingsView({
               onChange={e => setSupabaseCreds({ ...supabaseCreds, anonKey: e.target.value })}
             />
           </div>
-          <button type="button" className="secondary" onClick={onManualSync} style={{ marginTop: '8px' }}>
-            <Cloud /> Test Connection & Sync Now
-          </button>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '12px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void handleTestConnection()}
+              disabled={testingStatus.loading}
+              style={{ marginTop: '0' }}
+            >
+              <Cloud /> {testingStatus.loading ? 'Testing Connection...' : 'Test Connection & Sync Now'}
+            </button>
+            {testingStatus.result && (
+              <span
+                style={{
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  color: testingStatus.result.success ? '#10b981' : '#ef4444',
+                }}
+              >
+                {testingStatus.result.message}
+                {testingStatus.result.details && ` (${testingStatus.result.details.sessionsCount} sessions in cloud)`}
+              </span>
+            )}
+          </div>
         </section>
       </div>
 

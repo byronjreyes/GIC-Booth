@@ -80,3 +80,44 @@ export async function uploadThemeAsset(blob: Blob, fileName: string): Promise<st
     return null
   }
 }
+
+export async function testSupabaseConnection(): Promise<{
+  success: boolean
+  message: string
+  details?: {
+    sessionsCount: number
+    eventsCount: number
+    themesCount: number
+  }
+}> {
+  const client = getSupabaseClient()
+  if (!client) {
+    return { success: false, message: 'Supabase credentials are not configured.' }
+  }
+
+  try {
+    const [sessRes, evRes, thRes] = await Promise.all([
+      client.from('sessions').select('*', { count: 'exact', head: true }),
+      client.from('events').select('*', { count: 'exact', head: true }),
+      client.from('themes').select('*', { count: 'exact', head: true }),
+    ])
+
+    if (sessRes.error) throw sessRes.error
+    if (evRes.error) throw evRes.error
+    if (thRes.error) throw thRes.error
+
+    return {
+      success: true,
+      message: 'Connected to Supabase cloud successfully!',
+      details: {
+        sessionsCount: sessRes.count ?? 0,
+        eventsCount: evRes.count ?? 0,
+        themesCount: thRes.count ?? 0,
+      },
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { success: false, message: `Connection failed: ${msg}` }
+  }
+}
+
