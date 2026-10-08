@@ -1,16 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Download } from 'lucide-react'
-
-type ShareData = {
-  id: string
-  updatedAt: string
-  expiresAt: string
-  ready?: boolean
-  progress?: number
-  videoError?: string
-  image: { single: string; double: string }
-  video: { single: string; double: string } | null
-}
+import { getShare, type ShareData } from './shares'
 
 export default function Share() {
   const id = window.location.pathname.split('/')[2] || ''
@@ -22,20 +12,23 @@ export default function Share() {
   const openedAt = useRef(Date.now())
 
   const load = useCallback(async () => {
-    const response = await fetch(`/api/shares/${id}`, { cache: 'no-store' })
-    if (response.status === 404 && Date.now() - openedAt.current < 30_000) return
-    if (!response.ok) throw new Error(response.status === 410 || response.status === 404 ? 'This strip has expired.' : 'This strip is unavailable.')
-    setError('')
-    setShare(await response.json() as ShareData)
+    try {
+      const data = await getShare(id)
+      setError('')
+      setShare(data)
+    } catch (err) {
+      if (Date.now() - openedAt.current < 30_000) return
+      setError(err instanceof Error ? err.message : 'This strip is unavailable.')
+    }
   }, [id])
 
   useEffect(() => {
-    void load().catch(reason => setError(reason instanceof Error ? reason.message : 'This strip is unavailable.'))
+    void load()
   }, [load])
 
   useEffect(() => {
     if (share?.video || Date.now() - openedAt.current > 120_000) return
-    const timer = window.setInterval(() => void load().catch(() => {}), 2000)
+    const timer = window.setInterval(() => void load(), 2000)
     return () => window.clearInterval(timer)
   }, [load, share?.ready, Boolean(share?.video), Boolean(share)])
 
@@ -46,13 +39,26 @@ export default function Share() {
   }
 
   const source = kind === 'image' ? share.image[layout] : share.video?.[layout]
-  const download = () => {
+  const download = async () => {
     if (!source) return
-    const anchor = document.createElement('a')
-    anchor.href = source
     const extension = new URL(source, window.location.href).pathname.split('.').pop() || (kind === 'image' ? 'png' : 'mp4')
-    anchor.download = `kodakei-${layout}-${kind}.${extension}`
-    anchor.click()
+    const fileName = `gic-booth-${layout}-${kind}.${extension}`
+    try {
+      const resp = await fetch(source)
+      const blob = await resp.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = blobUrl
+      anchor.download = fileName
+      anchor.click()
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000)
+    } catch {
+      const anchor = document.createElement('a')
+      anchor.href = source
+      anchor.target = '_blank'
+      anchor.download = fileName
+      anchor.click()
+    }
   }
 
   return (

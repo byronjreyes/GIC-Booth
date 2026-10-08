@@ -40,6 +40,7 @@ import {
   silentPrint,
   type BoothSettings,
 } from './platform'
+import { saveShare } from './shares'
 
 type Step = 'welcome' | 'layout' | 'timer' | 'camera' | 'photos' | 'result'
 type CustomTab = 'themes' | 'filters' | 'stickers' | 'doodles'
@@ -99,15 +100,6 @@ function blobToDataUrl(blob: Blob) {
     reader.onerror = reject
     reader.readAsDataURL(blob)
   })
-}
-
-async function saveShare(id: string, media: Record<string, string | boolean | number>) {
-  const response = await fetch(`/api/shares/${id}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(media),
-  })
-  if (!response.ok) throw new Error('Could not publish QR strip')
 }
 
 function Progress({ step }: { step: Step }) {
@@ -376,15 +368,16 @@ function App() {
     if (!shareQr.current) {
       let baseUrl = `${window.location.origin}`
       const mode = currentSettings.current.qrDeliveryMode || 'auto'
+      const localPort = window.location.port ? `:${window.location.port}` : ':5173'
       if (mode === 'local') {
         const localIp = currentSettings.current.localHotspotIp || (await getLocalIp())
-        baseUrl = `http://${localIp}:5173`
+        baseUrl = `http://${localIp}${localPort}`
       } else if (mode === 'cloud') {
         baseUrl = 'https://gic-booth.vercel.app'
       } else if (mode === 'auto') {
         if (!navigator.onLine) {
           const localIp = currentSettings.current.localHotspotIp || (await getLocalIp())
-          baseUrl = `http://${localIp}:5173`
+          baseUrl = `http://${localIp}${localPort}`
         } else {
           baseUrl = 'https://gic-booth.vercel.app'
         }
