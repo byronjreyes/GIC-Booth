@@ -41,6 +41,15 @@ export interface BoothSettings {
   allowReprint: boolean
   printerName: string
   adminPin: string
+  // Phase 5: Hardware & Consumables
+  silentPrintEnabled: boolean
+  paperRollCapacity: number
+  paperRollRemaining: number
+  // Phase 6: Kiosk Lockdown & Network
+  kioskLockdown: boolean
+  autoStartOnBoot: boolean
+  qrDeliveryMode: 'cloud' | 'local' | 'auto'
+  localHotspotIp: string
 }
 
 export const defaultSettings: BoothSettings = {
@@ -57,6 +66,13 @@ export const defaultSettings: BoothSettings = {
   allowReprint: true,
   printerName: '',
   adminPin: '1234',
+  silentPrintEnabled: true,
+  paperRollCapacity: 700,
+  paperRollRemaining: 700,
+  kioskLockdown: false,
+  autoStartOnBoot: false,
+  qrDeliveryMode: 'auto',
+  localHotspotIp: '',
 }
 
 const STORAGE_KEY = 'gic-booth-events'
@@ -552,3 +568,177 @@ export function generateCalibrationSheetUrl(): string {
 
   return canvas.toDataURL('image/png')
 }
+
+// -----------------------------------------------------------------------------
+// PHASE 5: HARDWARE & SILENT PRINTING PLATFORM API
+// -----------------------------------------------------------------------------
+
+export interface PrinterInfo {
+  name: string
+  driverName: string
+  portName: string
+  status: string
+  isDefault: boolean
+}
+
+export interface PrintResult {
+  success: boolean
+  message: string
+  printer: string
+  copies: number
+}
+
+export async function listSystemPrinters(): Promise<PrinterInfo[]> {
+  if (isTauri()) {
+    try {
+      const printers = await invoke<PrinterInfo[]>('list_system_printers')
+      if (printers && printers.length > 0) return printers
+    } catch (err) {
+      console.warn('Failed to list system printers via Tauri:', err)
+    }
+  }
+  return [
+    { name: 'System Default Printer', driverName: 'Default', portName: 'DEFAULT', status: 'Ready', isDefault: true },
+    { name: 'DNP DS-RX1 / RX1HS', driverName: 'DNP RX1HS', portName: 'USB001', status: 'Ready', isDefault: false },
+    { name: 'Citizen CY-02 / CX-02', driverName: 'Citizen Photo', portName: 'USB002', status: 'Ready', isDefault: false },
+    { name: 'Microsoft Print to PDF', driverName: 'Print to PDF', portName: 'PORTPROMPT:', status: 'Ready', isDefault: false },
+  ]
+}
+
+export async function silentPrint(
+  imageDataUrl: string,
+  printerName?: string,
+  copies = 1
+): Promise<PrintResult> {
+  const currentSettings = getSettings()
+  const targetPrinter = printerName || currentSettings.printerName || undefined
+
+  if (isTauri() && currentSettings.silentPrintEnabled) {
+    try {
+      const res = await invoke<PrintResult>('silent_print', {
+        imageDataUrl,
+        printerName: targetPrinter,
+        copies,
+      })
+      // Decrement paper roll remaining
+      const newRemaining = Math.max(0, (currentSettings.paperRollRemaining ?? 700) - copies)
+      void saveSettings({ ...currentSettings, paperRollRemaining: newRemaining })
+      return res
+    } catch (err) {
+      console.warn('Tauri silent print failed, falling back:', err)
+      throw new Error(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  // Web fallback: simulated print or window.print()
+  const newRemaining = Math.max(0, (currentSettings.paperRollRemaining ?? 700) - copies)
+  void saveSettings({ ...currentSettings, paperRollRemaining: newRemaining })
+
+  return {
+    success: true,
+    message: `Print job spooled (${copies} copy/copies)`,
+    printer: targetPrinter || 'Default Printer',
+    copies,
+  }
+}
+
+export async function resetPaperRoll(capacity = 700): Promise<BoothSettings> {
+  const current = getSettings()
+  const updated: BoothSettings = {
+    ...current,
+    paperRollCapacity: capacity,
+    paperRollRemaining: capacity,
+  }
+  await saveSettings(updated)
+  return updated
+}
+
+// -----------------------------------------------------------------------------
+// PHASE 6: KIOSK HARDENING & SYSTEM API
+// -----------------------------------------------------------------------------
+
+export async function setKioskMode(enabled: boolean): Promise<void> {
+  if (isTauri()) {
+    try {
+      await invoke('set_kiosk_mode', { enabled })
+    } catch (err) {
+      console.warn('Failed to set kiosk mode via Tauri:', err)
+    }
+  } else {
+    try {
+      if (enabled) {
+        await document.documentElement.requestFullscreen?.()
+      } else if (document.fullscreenElement) {
+        await document.exitFullscreen?.()
+      }
+    } catch {
+      // Browser user-gesture restriction
+    }
+  }
+  const current = getSettings()
+  await saveSettings({ ...current, kioskLockdown: enabled })
+}
+
+export async function getLocalIp(): Promise<string> {
+  if (isTauri()) {
+    try {
+      const ip = await invoke<string>('get_local_ip')
+      if (ip && ip !== '127.0.0.1') return ip
+    } catch {
+      // fallback
+    }
+  }
+  return window.location.hostname || '127.0.0.1'
+}
+
+export async function setAutostart(enabled: boolean): Promise<boolean> {
+  if (isTauri()) {
+    try {
+      const res = await invoke<boolean>('set_autostart', { enabled })
+      const current = getSettings()
+      await saveSettings({ ...current, autoStartOnBoot: enabled })
+      return res
+    } catch (err) {
+      console.warn('Failed to configure autostart via Tauri:', err)
+    }
+  }
+  const current = getSettings()
+  await saveSettings({ ...current, autoStartOnBoot: enabled })
+  return true
+}
+
+export async function getAutostartStatus(): Promise<boolean> {
+  if (isTauri()) {
+    try {
+      return await invoke<boolean>('get_autostart_status')
+    } catch {
+      // fallback
+    }
+  }
+  return getSettings().autoStartOnBoot ?? false
+}
+
+export async function exitKioskApp(): Promise<void> {
+  if (isTauri()) {
+    await invoke('exit_kiosk_app')
+  } else {
+    window.close()
+  }
+}
+
+export async function restartKioskApp(): Promise<void> {
+  if (isTauri()) {
+    await invoke('restart_kiosk_app')
+  } else {
+    window.location.reload()
+  }
+}
+
+export async function rebootSystem(): Promise<void> {
+  if (isTauri()) {
+    await invoke('reboot_system')
+  } else {
+    alert('System reboot is only supported when running the native kiosk shell.')
+  }
+}
+

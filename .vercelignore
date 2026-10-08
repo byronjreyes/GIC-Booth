@@ -8,3 +8,4 @@ dist/
 .impeccable/
 .preview-qr*
 .tunnel*
+.env*

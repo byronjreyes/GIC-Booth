@@ -1,7 +1,8 @@
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{fs, sync::Mutex};
-use tauri::{Manager, State};
+use tauri::{AppHandle, Manager, State, Window};
 
 struct Database(Mutex<Connection>);
 
@@ -45,6 +46,25 @@ struct ThemeRecord {
     frame_data_url: String,
     active: bool,
     created_at: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+struct PrinterInfo {
+    name: String,
+    driver_name: String,
+    port_name: String,
+    status: String,
+    is_default: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+struct PrintResult {
+    success: bool,
+    message: String,
+    printer: String,
+    copies: u32,
 }
 
 #[tauri::command]
@@ -157,6 +177,262 @@ fn get_settings(database: State<Database>) -> Result<Option<serde_json::Value>, 
     }
 }
 
+// -----------------------------------------------------------------------------
+// PHASE 5: HARDWARE & SILENT PRINTING COMMANDS
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+fn list_system_printers() -> Result<Vec<PrinterInfo>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let script = r#"
+            $defName = (Get-CimInstance Win32_Printer | Where-Object Default | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue)
+            $list = @(Get-Printer | ForEach-Object {
+                [PSCustomObject]@{
+                    name = $_.Name
+                    driverName = $_.DriverName
+                    portName = $_.PortName
+                    status = if ($_.PrinterStatus -eq 0) { "Ready" } else { "Offline/Busy" }
+                    isDefault = ($_.Name -eq $defName)
+                }
+            })
+            $list | ConvertTo-Json -Compress
+        "#;
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .output()
+            .map_err(|e| format!("Failed to query printers: {}", e))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if stdout.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if stdout.starts_with('[') {
+            serde_json::from_str::<Vec<PrinterInfo>>(&stdout).map_err(|e| e.to_string())
+        } else if stdout.starts_with('{') {
+            let single: PrinterInfo = serde_json::from_str(&stdout).map_err(|e| e.to_string())?;
+            Ok(vec![single])
+        } else {
+            Ok(Vec::new())
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+fn silent_print(
+    image_data_url: String,
+    printer_name: Option<String>,
+    copies: Option<u32>,
+) -> Result<PrintResult, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+
+        let clean_base64 = if let Some(idx) = image_data_url.find(',') {
+            &image_data_url[idx + 1..]
+        } else {
+            &image_data_url
+        };
+
+        let bytes = STANDARD
+            .decode(clean_base64.trim())
+            .map_err(|e| format!("Invalid base64 image data: {}", e))?;
+
+        let temp_dir = std::env::temp_dir();
+        let filename = format!(
+            "gic-print-{}.png",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
+        let file_path = temp_dir.join(&filename);
+        std::fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write print image: {}", e))?;
+
+        let path_str = file_path.to_string_lossy().to_string();
+        let copies_count = copies.unwrap_or(1);
+
+        let script = format!(
+            r#"
+            $imgPath = "{}"
+            $targetPrinter = "{}"
+            $copies = {}
+
+            Add-Type -AssemblyName System.Drawing
+            $doc = New-Object System.Drawing.Printing.PrintDocument
+            if ($targetPrinter -ne "") {{
+                $doc.PrinterSettings.PrinterName = $targetPrinter
+            }}
+            $doc.PrinterSettings.Copies = [int]$copies
+            $doc.PrintController = New-Object System.Drawing.Printing.StandardPrintController
+            $img = [System.Drawing.Image]::FromFile($imgPath)
+            $doc.add_PrintPage({{
+                param($sender, $ev)
+                $ev.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $ev.Graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+                $ev.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+                $ev.Graphics.DrawImage($img, $ev.PageBounds)
+                $ev.HasMorePages = $false
+            }})
+            $doc.Print()
+            $img.Dispose()
+            Remove-Item -Force $imgPath -ErrorAction SilentlyContinue
+            "#,
+            path_str.replace('\\', "\\\\"),
+            printer_name.clone().unwrap_or_default().replace('"', "`\""),
+            copies_count
+        );
+
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .map_err(|e| format!("Failed to execute print command: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Print failed: {}", stderr));
+        }
+
+        let printer_used = printer_name.unwrap_or_else(|| "Default Windows Printer".to_string());
+        Ok(PrintResult {
+            success: true,
+            message: format!("Successfully sent {} copy/copies to {}", copies_count, printer_used),
+            printer: printer_used,
+            copies: copies_count,
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Silent printing is only supported on Windows".to_string())
+    }
+}
+
+// -----------------------------------------------------------------------------
+// PHASE 6: KIOSK HARDENING, LOCKDOWN & SYSTEM COMMANDS
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+fn set_kiosk_mode(window: Window, enabled: bool) -> Result<(), String> {
+    window.set_fullscreen(enabled).map_err(|e| e.to_string())?;
+    window.set_always_on_top(enabled).map_err(|e| e.to_string())?;
+    window.set_decorations(!enabled).map_err(|e| e.to_string())?;
+    window.set_resizable(!enabled).map_err(|e| e.to_string())?;
+    if enabled {
+        let _ = window.maximize();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_local_ip() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let script = r#"
+            (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254*" }).IPAddress | Select-Object -First 1
+        "#;
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .output()
+            .map_err(|e| format!("Failed to get local IP: {}", e))?;
+        let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if ip.is_empty() {
+            Ok("127.0.0.1".to_string())
+        } else {
+            Ok(ip)
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok("127.0.0.1".to_string())
+    }
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let exe_str = exe.to_string_lossy().to_string();
+        let script = if enabled {
+            format!(
+                r#"Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'GICBooth' -Value '"{}"'"#,
+                exe_str.replace('\\', "\\\\")
+            )
+        } else {
+            r#"Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'GICBooth' -ErrorAction SilentlyContinue"#.to_string()
+        };
+
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .map_err(|e| format!("Failed to configure autostart: {}", e))?;
+        Ok(output.status.success())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+fn get_autostart_status() -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let script = r#"
+            $val = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'GICBooth' -ErrorAction SilentlyContinue
+            if ($null -ne $val.GICBooth) { "true" } else { "false" }
+        "#;
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .output()
+            .map_err(|e| format!("Failed to check autostart: {}", e))?;
+        let status = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok(status == "true")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+fn exit_kiosk_app(app_handle: AppHandle) -> Result<(), String> {
+    app_handle.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+fn restart_kiosk_app(app_handle: AppHandle) {
+    app_handle.restart();
+}
+
+
+#[tauri::command]
+fn reboot_system() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        Command::new("shutdown")
+            .args(["/r", "/t", "5", "/c", "GIC Booth Kiosk System Restart"])
+            .spawn()
+            .map_err(|e| format!("Failed to trigger system reboot: {}", e))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -211,8 +487,18 @@ pub fn run() {
             set_theme_active,
             delete_theme,
             save_settings,
-            get_settings
+            get_settings,
+            list_system_printers,
+            silent_print,
+            set_kiosk_mode,
+            get_local_ip,
+            set_autostart,
+            get_autostart_status,
+            exit_kiosk_app,
+            restart_kiosk_app,
+            reboot_system
         ])
         .run(tauri::generate_context!())
         .expect("failed to run GIC Booth");
 }
+

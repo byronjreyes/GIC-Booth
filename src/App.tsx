@@ -30,7 +30,16 @@ import {
   type PlacedSticker,
   type Theme,
 } from './compositor'
-import { createId, getSettings, listThemes, recordEvent, type BoothSettings } from './platform'
+import {
+  createId,
+  getLocalIp,
+  getSettings,
+  listThemes,
+  recordEvent,
+  setKioskMode,
+  silentPrint,
+  type BoothSettings,
+} from './platform'
 
 type Step = 'welcome' | 'layout' | 'timer' | 'camera' | 'photos' | 'result'
 type CustomTab = 'themes' | 'filters' | 'stickers' | 'doodles'
@@ -196,7 +205,45 @@ function App() {
     hasMoved: boolean
   } | null>(null)
 
+  const hasAutoPrinted = useRef(false)
+  const adminTapCount = useRef(0)
+  const lastAdminTap = useRef(0)
+
   const [wrapperWidth, setWrapperWidth] = useState(240)
+
+  // Enforce kiosk lockdown on initial mount if enabled
+  useEffect(() => {
+    if (currentSettings.current.kioskLockdown) {
+      void setKioskMode(true)
+    }
+  }, [])
+
+  // Admin access secret keyboard shortcut (Ctrl + Alt + A)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.altKey && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault()
+        window.location.href = '/admin'
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  const handleBrandTap = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const now = Date.now()
+    if (now - lastAdminTap.current < 1000) {
+      adminTapCount.current += 1
+      if (adminTapCount.current >= 5) {
+        adminTapCount.current = 0
+        window.location.href = '/admin'
+      }
+    } else {
+      adminTapCount.current = 1
+    }
+    lastAdminTap.current = now
+  }
 
   useEffect(() => {
     latestStickersRef.current = stickers
@@ -261,6 +308,7 @@ function App() {
     setCustomTab('themes')
     setError('')
     setHasPrinted(false)
+    hasAutoPrinted.current = false
     if (videoDebounceTimer.current) {
       window.clearTimeout(videoDebounceTimer.current)
       videoDebounceTimer.current = null
@@ -326,7 +374,22 @@ function App() {
     const chosenPhotos = selected.map(index => photos[index])
     if (!shareId.current) shareId.current = createId()
     if (!shareQr.current) {
-      shareQr.current = await QRCode.toDataURL(`${window.location.origin}/share/${shareId.current}`, { width: 256, margin: 1 })
+      let baseUrl = `${window.location.origin}`
+      const mode = currentSettings.current.qrDeliveryMode || 'auto'
+      if (mode === 'local') {
+        const localIp = currentSettings.current.localHotspotIp || (await getLocalIp())
+        baseUrl = `http://${localIp}:5173`
+      } else if (mode === 'cloud') {
+        baseUrl = 'https://gic-booth.vercel.app'
+      } else if (mode === 'auto') {
+        if (!navigator.onLine) {
+          const localIp = currentSettings.current.localHotspotIp || (await getLocalIp())
+          baseUrl = `http://${localIp}:5173`
+        } else {
+          baseUrl = 'https://gic-booth.vercel.app'
+        }
+      }
+      shareQr.current = await QRCode.toDataURL(`${baseUrl}/share/${shareId.current}`, { width: 256, margin: 1 })
     }
     const text = { title, showBrand: brand, qrCode: shareQr.current }
     const customization: CustomizationOptions = {
@@ -756,11 +819,34 @@ function App() {
     track('download_completed', { copies })
   }
 
-  const print = () => {
+  const print = useCallback(async () => {
     track('print_requested', { copies })
     setHasPrinted(true)
-    window.print()
-  }
+    try {
+      if (currentSettings.current.silentPrintEnabled) {
+        await silentPrint(result, currentSettings.current.printerName, copies)
+      } else {
+        window.print()
+      }
+    } catch (err) {
+      console.warn('Silent print error, falling back to window.print:', err)
+      window.print()
+    }
+  }, [copies, result, track])
+
+  // Automatically print when entering 'result' step if printMode is configured to 'auto'
+  useEffect(() => {
+    if (
+      step === 'result' &&
+      currentSettings.current.printMode === 'auto' &&
+      result &&
+      !hasAutoPrinted.current &&
+      !hasPrinted
+    ) {
+      hasAutoPrinted.current = true
+      void print()
+    }
+  }, [step, result, hasPrinted, print])
 
   const startOver = () => {
     track('session_completed')
@@ -784,7 +870,9 @@ function App() {
 
       {step === 'welcome' && (
         <button className="welcome" onClick={beginSession}>
-          <span className="brand">{currentSettings.current.brandTitle || 'GIC BOOTH'}</span>
+          <span className="brand" onClick={handleBrandTap} title="GIC BOOTH">
+            {currentSettings.current.brandTitle || 'GIC BOOTH'}
+          </span>
           <span className="welcome-strip" aria-hidden="true"><b /><b /><b /><b /></span>
           <strong>Make your<br />photo strip.</strong>
           <span className="start-prompt">Touch anywhere to start</span>

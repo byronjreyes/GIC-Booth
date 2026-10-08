@@ -18,31 +18,46 @@ import {
   Layers,
   LayoutDashboard,
   Lock,
+  LogOut,
+  Monitor,
+  Power,
   Printer,
   RefreshCw,
+  RotateCcw,
   Search,
   Settings,
   Sliders,
   Trash2,
   Upload,
   Users,
+  Wifi,
 } from 'lucide-react'
 import {
   createId,
   defaultSettings,
   deleteTheme,
+  exitKioskApp,
   generateCalibrationSheetUrl,
   getAnalyticsReport,
   getEventCounts,
+  getLocalIp,
   getSessionHistory,
   getSettings,
+  listSystemPrinters,
   listThemes,
+  rebootSystem,
+  resetPaperRoll,
+  restartKioskApp,
   saveSettings,
   saveTheme,
+  setAutostart,
+  setKioskMode,
   setThemeActive,
+  silentPrint,
   type AnalyticsReport,
   type BoothSettings,
   type DateRangeFilter,
+  type PrinterInfo,
   type SessionSummary,
   type StoredTheme,
 } from './platform'
@@ -798,6 +813,8 @@ function DesignsView({ themes, onRefresh }: { themes: StoredTheme[]; onRefresh: 
 /* -------------------------------------------------------------------------- */
 /* PRINTER VIEW                                                               */
 /* -------------------------------------------------------------------------- */
+/* PRINTER VIEW (PHASE 5: HARDWARE & SILENT PRINTING)                         */
+/* -------------------------------------------------------------------------- */
 function PrinterView({
   settings,
   onUpdateSettings,
@@ -809,7 +826,16 @@ function PrinterView({
   const [defaultCopies, setDefaultCopies] = useState<1 | 2>(settings.defaultCopies)
   const [allowReprint, setAllowReprint] = useState(settings.allowReprint)
   const [printerName, setPrinterName] = useState(settings.printerName)
+  const [silentPrintEnabled, setSilentPrintEnabled] = useState(settings.silentPrintEnabled ?? true)
+  const [paperCapacity, setPaperCapacity] = useState(settings.paperRollCapacity ?? 700)
+  const [paperRemaining, setPaperRemaining] = useState(settings.paperRollRemaining ?? 700)
+  const [systemPrinters, setSystemPrinters] = useState<PrinterInfo[]>([])
+  const [printStatus, setPrintStatus] = useState<string>('')
   const [savedNotice, setSavedNotice] = useState(false)
+
+  useEffect(() => {
+    void listSystemPrinters().then(printers => setSystemPrinters(printers))
+  }, [])
 
   const handleSave = () => {
     const updated: BoothSettings = {
@@ -818,6 +844,9 @@ function PrinterView({
       defaultCopies,
       allowReprint,
       printerName,
+      silentPrintEnabled,
+      paperRollCapacity: paperCapacity,
+      paperRollRemaining: paperRemaining,
     }
     onUpdateSettings(updated)
     void saveSettings(updated)
@@ -825,37 +854,54 @@ function PrinterView({
     setTimeout(() => setSavedNotice(false), 2500)
   }
 
-  const handleTestPrint = () => {
+  const handleResetRoll = async (newCapacity = 700) => {
+    const updated = await resetPaperRoll(newCapacity)
+    setPaperCapacity(updated.paperRollCapacity)
+    setPaperRemaining(updated.paperRollRemaining)
+    onUpdateSettings(updated)
+    setPrintStatus(`✓ Paper roll reset to ${newCapacity} prints.`)
+    setTimeout(() => setPrintStatus(''), 3000)
+  }
+
+  const handleTestPrint = async () => {
     const testSheetUrl = generateCalibrationSheetUrl()
     if (!testSheetUrl) return
 
-    // Open high-res test sheet in print window
-    const printWindow = window.open('', '_blank')
-    if (printWindow) {
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>GIC Booth - Printer Test Calibration Sheet</title>
-          <style>
-            @page { size: 4in 6in; margin: 0; }
-            body { margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; background: white; }
-            img { width: 4in; height: 6in; display: block; object-fit: contain; }
-          </style>
-        </head>
-        <body>
-          <img src="${testSheetUrl}" onload="window.print(); window.close();" />
-        </body>
-        </html>
-      `)
-      printWindow.document.close()
-    } else {
-      // Fallback
-      const img = new Image()
-      img.src = testSheetUrl
-      window.print()
+    setPrintStatus('Sending test alignment sheet to printer...')
+    try {
+      if (silentPrintEnabled) {
+        const res = await silentPrint(testSheetUrl, printerName || undefined, 1)
+        setPrintStatus(`✓ ${res.message} on ${res.printer}`)
+        setPaperRemaining(prev => Math.max(0, prev - 1))
+      } else {
+        const printWindow = window.open('', '_blank')
+        if (printWindow) {
+          printWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <title>GIC Booth - Printer Test Calibration Sheet</title>
+              <style>
+                @page { size: 4in 6in; margin: 0; }
+                body { margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; background: white; }
+                img { width: 4in; height: 6in; display: block; object-fit: contain; }
+              </style>
+            </head>
+            <body>
+              <img src="${testSheetUrl}" onload="window.print(); window.close();" />
+            </body>
+            </html>
+          `)
+          printWindow.document.close()
+        }
+        setPrintStatus('✓ Sent via system print dialog.')
+      }
+    } catch (err: unknown) {
+      setPrintStatus(`✗ Print failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
+
+  const rollPercent = paperCapacity > 0 ? Math.round((paperRemaining / paperCapacity) * 100) : 0
 
   return (
     <div className="printer-workspace">
@@ -864,33 +910,92 @@ function PrinterView({
           <h3>Hardware Print Calibration</h3>
         </div>
         <p className="hint">
-          Click below to send a high-resolution 4×6 inch (1200×1800 px @ 300 DPI) alignment test sheet directly to your Windows printer.
-          Verify border margins, color accuracy, and center 2×6 cut marks.
+          Send a high-resolution 4×6 inch (1200×1800 px @ 300 DPI) alignment test sheet directly to your photo printer.
+          Verify border margins, color accuracy, and center 2×6 cut line.
         </p>
 
         <div className="calibration-sheet-preview">
           <img src={generateCalibrationSheetUrl()} alt="Printer Calibration Sheet" />
         </div>
 
-        <button className="primary calibration-btn" onClick={handleTestPrint}>
+        <button className="primary calibration-btn" onClick={() => void handleTestPrint()}>
           <Printer /> Run Calibration Print Test (4×6")
         </button>
+        {printStatus && (
+          <p style={{ marginTop: '10px', fontSize: '0.9rem', fontWeight: 600, color: printStatus.startsWith('✓') ? '#10b981' : '#ef4444' }}>
+            {printStatus}
+          </p>
+        )}
       </section>
 
       <section className="dashboard-panel printer-config-panel">
         <div className="panel-header">
-          <h3>Printer Configuration</h3>
+          <h3>Consumables & Ribbon Level</h3>
+        </div>
+        <div style={{ marginBottom: '20px', padding: '16px', background: '#f5f5f5', borderRadius: '8px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <strong>Paper Roll Status</strong>
+            <span style={{ fontWeight: 700, color: rollPercent < 15 ? '#ef4444' : rollPercent < 30 ? '#f59e0b' : '#10b981' }}>
+              {paperRemaining} / {paperCapacity} prints ({rollPercent}%)
+            </span>
+          </div>
+          <div style={{ width: '100%', height: '12px', background: '#ddd', borderRadius: '6px', overflow: 'hidden' }}>
+            <div
+              style={{
+                width: `${rollPercent}%`,
+                height: '100%',
+                background: rollPercent < 15 ? '#ef4444' : rollPercent < 30 ? '#f59e0b' : '#10b981',
+                transition: 'width 0.3s ease',
+              }}
+            />
+          </div>
+          {rollPercent < 15 && (
+            <p style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 700, marginTop: '8px' }}>
+              ⚠️ Low Paper Alert: Less than {paperRemaining} prints remaining on current roll!
+            </p>
+          )}
+          <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+            <button type="button" className="secondary" onClick={() => void handleResetRoll(700)}>
+              Reset 700-Print Roll (DNP RX1)
+            </button>
+            <button type="button" className="secondary" onClick={() => void handleResetRoll(400)}>
+              Reset 400-Print Roll (DNP DS620)
+            </button>
+          </div>
+        </div>
+
+        <div className="panel-header" style={{ marginTop: '24px' }}>
+          <h3>Printer Driver Configuration</h3>
         </div>
 
         <div className="form-group">
-          <label>Target Printer Name / Model</label>
-          <input
-            type="text"
-            placeholder="e.g. DNP DS-RX1HS, Citizen CY-02, HiTi P525L (or OS Default)"
+          <label>Target Hardware Printer</label>
+          <select
             value={printerName}
             onChange={e => setPrinterName(e.target.value)}
-          />
-          <small>Leave blank to always invoke the default Windows printer selector.</small>
+          >
+            <option value="">(Default Windows Printer)</option>
+            {systemPrinters.map(p => (
+              <option key={p.name} value={p.name}>
+                {p.name} {p.isDefault ? '★ [Default]' : ''} ({p.status})
+              </option>
+            ))}
+          </select>
+          <small>Detected {systemPrinters.length} installed printers on this system.</small>
+        </div>
+
+        <div className="form-group checkbox-group" style={{ marginBottom: '16px' }}>
+          <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={silentPrintEnabled}
+              onChange={e => setSilentPrintEnabled(e.target.checked)}
+            />
+            <strong>Silent Hardware Printing (Direct Spooler — No OS Print Dialogs)</strong>
+          </label>
+          <small style={{ marginLeft: '24px', display: 'block' }}>
+            Bypasses Windows popup so customers never see print dialogs at the kiosk.
+          </small>
         </div>
 
         <div className="form-group">
@@ -922,7 +1027,7 @@ function PrinterView({
         </div>
 
         <div className="form-group checkbox-group">
-          <label>
+          <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <input
               type="checkbox"
               checked={allowReprint}
@@ -942,6 +1047,7 @@ function PrinterView({
 }
 
 /* -------------------------------------------------------------------------- */
+
 /* CAMERA VIEW                                                                */
 /* -------------------------------------------------------------------------- */
 function CameraView() {
@@ -1064,11 +1170,51 @@ function SettingsView({
     }
   }
 
-  const handleSaveAll = (e: FormEvent) => {
+  const handleDetectIp = async () => {
+    try {
+      const ip = await getLocalIp()
+      setFormData(prev => ({ ...prev, localHotspotIp: ip }))
+      setNotice(`✓ Detected local IP: ${ip}`)
+      setTimeout(() => setNotice(''), 3000)
+    } catch {
+      setNotice('✗ Could not detect local IP')
+      setTimeout(() => setNotice(''), 3000)
+    }
+  }
+
+  const handleToggleKioskNow = async () => {
+    const next = !formData.kioskLockdown
+    setFormData(prev => ({ ...prev, kioskLockdown: next }))
+    await setKioskMode(next)
+    setNotice(next ? '✓ Kiosk Lockdown active (Fullscreen / Always-on-top)' : '✓ Kiosk Lockdown deactivated')
+    setTimeout(() => setNotice(''), 3000)
+  }
+
+  const handleRestartApp = async () => {
+    if (confirm('Restart the GIC Booth application?')) {
+      await restartKioskApp()
+    }
+  }
+
+  const handleExitApp = async () => {
+    if (confirm('Exit GIC Booth to Windows desktop?')) {
+      await exitKioskApp()
+    }
+  }
+
+  const handleRebootPC = async () => {
+    if (confirm('WARNING: Are you sure you want to REBOOT the entire Windows PC?')) {
+      await rebootSystem()
+    }
+  }
+
+  const handleSaveAll = async (e: FormEvent) => {
     e.preventDefault()
     onSave(formData)
     saveSupabaseCredentials(supabaseCreds.url, supabaseCreds.anonKey)
-    setNotice('✓ Settings and Cloud credentials saved.')
+    await setKioskMode(formData.kioskLockdown ?? false)
+    await setAutostart(formData.autoStartOnBoot ?? false)
+    setNotice('✓ Settings, Kiosk Lockdown, and Cloud credentials saved.')
     setTimeout(() => setNotice(''), 3000)
   }
 
@@ -1128,6 +1274,35 @@ function SettingsView({
               onChange={e => setFormData({ ...formData, adminPin: e.target.value })}
             />
             <small>PIN required to enter this admin panel from the booth.</small>
+          </div>
+
+          <h3 style={{ marginTop: '28px' }}>Windows System Controls</h3>
+          <p className="hint">Administrative hardware commands for the Windows kiosk PC.</p>
+          <div className="system-actions-grid">
+            <button
+              type="button"
+              className="system-action-btn"
+              onClick={() => void handleRestartApp()}
+              title="Restart the booth frontend and background process"
+            >
+              <RotateCcw size={16} /> Restart App
+            </button>
+            <button
+              type="button"
+              className="system-action-btn"
+              onClick={() => void handleExitApp()}
+              title="Close kiosk and return to Windows desktop"
+            >
+              <LogOut size={16} /> Exit to Desktop
+            </button>
+            <button
+              type="button"
+              className="system-action-btn danger"
+              onClick={() => void handleRebootPC()}
+              title="Power cycle / reboot Windows operating system"
+            >
+              <Power size={16} /> Reboot PC
+            </button>
           </div>
         </section>
 
@@ -1207,6 +1382,79 @@ function SettingsView({
                 {testingStatus.result.details && ` (${testingStatus.result.details.sessionsCount} sessions in cloud)`}
               </span>
             )}
+          </div>
+
+          <h3 style={{ marginTop: '28px' }}>Kiosk Lockdown & Offline Network</h3>
+          <p className="hint">Hardens booth display for public venues and zero-internet environments.</p>
+
+          <div className="form-group checkbox-group" style={{ marginBottom: '14px' }}>
+            <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="checkbox"
+                checked={formData.kioskLockdown ?? false}
+                onChange={e => setFormData({ ...formData, kioskLockdown: e.target.checked })}
+              />
+              <strong>Fullscreen Kiosk Lockdown (Always-on-top, borderless)</strong>
+            </label>
+            <small style={{ marginLeft: '26px', display: 'block' }}>
+              Hides window titlebar, prevents resizing, and keeps booth permanently front and center.
+            </small>
+            <div style={{ marginLeft: '26px', marginTop: '6px' }}>
+              <button
+                type="button"
+                className="secondary"
+                style={{ padding: '6px 12px', fontSize: '12px' }}
+                onClick={() => void handleToggleKioskNow()}
+              >
+                <Monitor size={14} /> {formData.kioskLockdown ? 'Exit Fullscreen Kiosk' : 'Activate Kiosk Now'}
+              </button>
+            </div>
+          </div>
+
+          <div className="form-group checkbox-group" style={{ marginBottom: '14px' }}>
+            <label style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="checkbox"
+                checked={formData.autoStartOnBoot ?? false}
+                onChange={e => setFormData({ ...formData, autoStartOnBoot: e.target.checked })}
+              />
+              <strong>Launch GIC Booth automatically on Windows Startup</strong>
+            </label>
+            <small style={{ marginLeft: '26px', display: 'block' }}>
+              Configures Windows HKCU Run key so the kiosk launches immediately upon powering on.
+            </small>
+          </div>
+
+          <div className="form-group">
+            <label>QR Code Download Delivery Mode</label>
+            <select
+              value={formData.qrDeliveryMode || 'auto'}
+              onChange={e => setFormData({ ...formData, qrDeliveryMode: e.target.value as 'auto' | 'cloud' | 'local' })}
+            >
+              <option value="auto">Automatic — Cloud when online, Local Hotspot fallback when offline</option>
+              <option value="cloud">Cloud Only — Always route via Vercel cloud server</option>
+              <option value="local">Local Hotspot Only — Zero-Internet offline Wi-Fi router / hotspot</option>
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>Local Hotspot IP Address</label>
+            <div className="ip-detect-row">
+              <input
+                placeholder="e.g. 192.168.1.100 or 172.20.10.1"
+                value={formData.localHotspotIp || ''}
+                onChange={e => setFormData({ ...formData, localHotspotIp: e.target.value })}
+              />
+              <button
+                type="button"
+                className="secondary"
+                style={{ whiteSpace: 'nowrap' }}
+                onClick={() => void handleDetectIp()}
+              >
+                <Wifi size={14} /> Detect LAN IP
+              </button>
+            </div>
+            <small>Used for offline guest phones connected to the booth's local Wi-Fi router.</small>
           </div>
         </section>
       </div>

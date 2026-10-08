@@ -616,3 +616,43 @@ h1 { font-family: 'Barlow Condensed', sans-serif; font-size: clamp(64px, 9vw, 13
   .admin-metrics { grid-template-columns: 1fr 1fr; }
 }
 
+/* Kiosk & System Actions */
+.system-actions-grid {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.system-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 13px;
+  border: 2px solid #171717;
+  background: white;
+  color: #171717;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.system-action-btn:hover {
+  background: #f0f0f0;
+}
+.system-action-btn.danger {
+  border-color: #e43d30;
+  color: #e43d30;
+}
+.system-action-btn.danger:hover {
+  background: #fde3df;
+}
+.ip-detect-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ip-detect-row input {
+  flex: 1;
+}
+
