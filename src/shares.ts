@@ -27,11 +27,13 @@ export type SaveSharePayload = {
 }
 
 function decodeDataUrl(value: unknown): { mime: string; blob: Blob } | null {
-  if (typeof value !== 'string') return null
-  const match = value.match(/^data:([^;]+);base64,([\s\S]+)$/)
-  if (!match) return null
-  const mime = match[1]
-  const base64Data = match[2]
+  if (typeof value !== 'string' || !value.startsWith('data:')) return null
+  const commaIndex = value.indexOf(',')
+  if (commaIndex === -1) return null
+  const header = value.slice(5, commaIndex) // e.g. "video/webm;codecs=vp8;base64" or "image/png;base64"
+  if (!header.includes(';base64')) return null
+  const mime = header.split(';')[0].trim() || 'application/octet-stream'
+  const base64Data = value.slice(commaIndex + 1)
   try {
     const binaryString = atob(base64Data)
     const len = binaryString.length
@@ -40,7 +42,8 @@ function decodeDataUrl(value: unknown): { mime: string; blob: Blob } | null {
       bytes[i] = binaryString.charCodeAt(i)
     }
     return { mime, blob: new Blob([bytes], { type: mime }) }
-  } catch {
+  } catch (err) {
+    console.warn('Failed to decode data URL:', err)
     return null
   }
 }
@@ -158,8 +161,8 @@ export async function saveShare(id: string, payload: SaveSharePayload): Promise<
             single: singleImageUrl,
             double: doubleImageUrl,
           },
-          video: (singleVideoUrl && doubleVideoUrl)
-            ? { single: singleVideoUrl, double: doubleVideoUrl }
+          video: (singleVideoUrl || doubleVideoUrl)
+            ? { single: singleVideoUrl || doubleVideoUrl, double: doubleVideoUrl || singleVideoUrl }
             : existing?.video || null,
         }
 
