@@ -1,8 +1,19 @@
 export type Layout = {
-  id: 'classic-2' | 'classic-3' | 'classic-4' | 'grid-4' | 'wide-4' | 'portrait-4'
+  id:
+    | 'classic-2'
+    | 'classic-3'
+    | 'classic-4'
+    | 'grid-4'
+    | 'tight-4'
+    | 'tight-3'
+    | 'landscape-3'
+    | 'landscape-4'
+    | 'wide-4'
+    | 'portrait-4'
   name: string
   requiredPhotos: number
   description?: string
+  orientation?: 'portrait' | 'landscape'
 }
 
 export type Theme = {
@@ -28,8 +39,8 @@ export type PhotoFilter = 'none' | 'bw' | 'warm' | 'vintage' | 'cool' | 'soft'
 export type PlacedSticker = {
   id: string
   emoji: string
-  x: number // px 0..600
-  y: number // px 0..1800
+  x: number // px 0..600 or 0..1800
+  y: number // px 0..1800 or 0..600
   size: number
   rotation?: number // in degrees
 }
@@ -53,6 +64,13 @@ const SIDE = 42
 const TOP = 132
 const BOTTOM = 170
 const GAP = 22
+
+export function getStripDimensions(layout: Layout): { width: number; height: number } {
+  if (layout.orientation === 'landscape' || layout.id.startsWith('landscape')) {
+    return { width: 1800, height: 600 }
+  }
+  return { width: 600, height: 1800 }
+}
 
 export function getCanvasFilter(filter: PhotoFilter): string {
   switch (filter) {
@@ -83,6 +101,66 @@ export function getPhotoRegions(layout: Layout): Array<{ x: number; y: number; w
     ]
   }
 
+  // 1. Tight 4 Cut (Minimal hairline spacing 4 cut - 2x6 strip)
+  if (layout.id === 'tight-4') {
+    const tightSide = 26
+    const tightGap = 8
+    const tightTop = 94
+    const photoWidth = WIDTH - tightSide * 2 // 548
+    const photoHeight = 362
+    return Array.from({ length: 4 }, (_, index) => ({
+      x: tightSide,
+      y: tightTop + index * (photoHeight + tightGap),
+      width: photoWidth,
+      height: photoHeight,
+    }))
+  }
+
+  // 2. Tight 3 Cut (Minimal hairline spacing 3 cut - 2x6 strip)
+  if (layout.id === 'tight-3') {
+    const tightSide = 26
+    const tightGap = 8
+    const tightTop = 96
+    const photoWidth = WIDTH - tightSide * 2 // 548
+    const photoHeight = 418
+    return Array.from({ length: 3 }, (_, index) => ({
+      x: tightSide,
+      y: tightTop + index * (photoHeight + tightGap),
+      width: photoWidth,
+      height: photoHeight,
+    }))
+  }
+
+  // 3. Landscape 3 Cut (Horizontal 6x2 strip)
+  if (layout.id === 'landscape-3') {
+    const leftMargin = 36
+    const gap = 8
+    const photoWidth = 450
+    const photoHeight = 400
+    const photoY = 100
+    return Array.from({ length: 3 }, (_, index) => ({
+      x: leftMargin + index * (photoWidth + gap),
+      y: photoY,
+      width: photoWidth,
+      height: photoHeight,
+    }))
+  }
+
+  // 4. Landscape 4 Cut (Horizontal 6x2 strip)
+  if (layout.id === 'landscape-4') {
+    const leftMargin = 30
+    const gap = 8
+    const photoWidth = 336
+    const photoHeight = 400
+    const photoY = 100
+    return Array.from({ length: 4 }, (_, index) => ({
+      x: leftMargin + index * (photoWidth + gap),
+      y: photoY,
+      width: photoWidth,
+      height: photoHeight,
+    }))
+  }
+
   const count = layout.requiredPhotos
   const photoHeight = (HEIGHT - TOP - BOTTOM - GAP * (count - 1)) / count
   return Array.from({ length: count }, (_, index) => ({
@@ -102,6 +180,7 @@ export function getPhotoAspectRatio(layout: Layout): number {
   const regions = getPhotoRegions(layout)
   return regions[0].width / regions[0].height
 }
+
 
 export function readableTextColor(background: string) {
   const channels = background.match(/[a-f\d]{2}/gi)?.map(value => parseInt(value, 16) / 255) ?? [1, 1, 1]
@@ -132,19 +211,20 @@ function drawPhotos(
   layout: Layout,
   filter: PhotoFilter = 'none',
   offsetX = 0,
+  offsetY = 0,
 ) {
   const regions = getPhotoRegions(layout)
   images.forEach((image, index) => {
     const region = regions[index]
     if (!region) return
     ctx.fillStyle = matte
-    ctx.fillRect(offsetX + region.x, region.y, region.width, region.height)
+    ctx.fillRect(offsetX + region.x, offsetY + region.y, region.width, region.height)
 
     ctx.save()
     if (filter && filter !== 'none') {
       ctx.filter = getCanvasFilter(filter)
     }
-    cover(ctx, image, offsetX + region.x, region.y, region.width, region.height)
+    cover(ctx, image, offsetX + region.x, offsetY + region.y, region.width, region.height)
     ctx.restore()
   })
 }
@@ -154,6 +234,7 @@ function drawDecorations(
   stickers: PlacedSticker[] = [],
   doodles: DoodleStroke[] = [],
   offsetX = 0,
+  offsetY = 0,
 ) {
   // 1. Draw freehand doodles
   doodles.forEach(stroke => {
@@ -164,9 +245,9 @@ function drawDecorations(
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     ctx.beginPath()
-    ctx.moveTo(offsetX + stroke.points[0].x, stroke.points[0].y)
+    ctx.moveTo(offsetX + stroke.points[0].x, offsetY + stroke.points[0].y)
     for (let i = 1; i < stroke.points.length; i++) {
-      ctx.lineTo(offsetX + stroke.points[i].x, stroke.points[i].y)
+      ctx.lineTo(offsetX + stroke.points[i].x, offsetY + stroke.points[i].y)
     }
     ctx.stroke()
     ctx.restore()
@@ -175,7 +256,7 @@ function drawDecorations(
   // 2. Draw placed stickers
   stickers.forEach(s => {
     ctx.save()
-    ctx.translate(offsetX + s.x, s.y)
+    ctx.translate(offsetX + s.x, offsetY + s.y)
     if (s.rotation) {
       ctx.rotate((s.rotation * Math.PI) / 180)
     }
@@ -187,25 +268,76 @@ function drawDecorations(
   })
 }
 
-function drawText(ctx: CanvasRenderingContext2D, ink: string, text: StripText, offsetX = 0) {
-  ctx.fillStyle = ink
-  ctx.textAlign = 'center'
-  ctx.font = '700 44px Archivo, sans-serif'
-  ctx.fillText(text.title.trim(), offsetX + WIDTH / 2, 84, WIDTH - SIDE * 2)
-}
-
-async function drawFooter(ctx: CanvasRenderingContext2D, ink: string, text: StripText, offsetX = 0) {
-  if (text.qrCode) {
-    const qr = await loadImage(text.qrCode)
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(offsetX + SIDE, HEIGHT - 150, 92, 92)
-    ctx.drawImage(qr, offsetX + SIDE + 4, HEIGHT - 146, 84, 84)
-  }
-  if (text.showBrand) {
+function drawText(
+  ctx: CanvasRenderingContext2D,
+  ink: string,
+  text: StripText,
+  offsetX = 0,
+  offsetY = 0,
+  layout?: Layout,
+) {
+  const isLandscape = layout?.orientation === 'landscape' || layout?.id.startsWith('landscape')
+  if (!isLandscape) {
+    const isTight = layout?.id.startsWith('tight')
+    const textY = isTight ? 64 : 84
     ctx.fillStyle = ink
     ctx.textAlign = 'center'
     ctx.font = '700 44px Archivo, sans-serif'
-    ctx.fillText('KODAKEI', offsetX + WIDTH / 2, HEIGHT - 92)
+    ctx.fillText(text.title.trim(), offsetX + WIDTH / 2, offsetY + textY, WIDTH - (isTight ? 26 : SIDE) * 2)
+  } else {
+    // For landscape strip: right branding area center is at x = 1605
+    const centerX = offsetX + 1605
+    ctx.fillStyle = ink
+    ctx.textAlign = 'center'
+    ctx.font = '700 38px Archivo, sans-serif'
+    ctx.fillText(text.title.trim(), centerX, offsetY + 80, 340)
+  }
+}
+
+async function drawFooter(
+  ctx: CanvasRenderingContext2D,
+  ink: string,
+  text: StripText,
+  offsetX = 0,
+  offsetY = 0,
+  layout?: Layout,
+) {
+  const isLandscape = layout?.orientation === 'landscape' || layout?.id.startsWith('landscape')
+  if (!isLandscape) {
+    const isTight = layout?.id.startsWith('tight')
+    const sideMargin = isTight ? 26 : SIDE
+    const qrSize = 92
+    const qrY = isTight ? HEIGHT - 165 : HEIGHT - 150
+    const brandY = isTight ? HEIGHT - 95 : HEIGHT - 92
+
+    if (text.qrCode) {
+      const qr = await loadImage(text.qrCode)
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(offsetX + sideMargin, offsetY + qrY, qrSize, qrSize)
+      ctx.drawImage(qr, offsetX + sideMargin + 4, offsetY + qrY + 4, qrSize - 8, qrSize - 8)
+    }
+    if (text.showBrand) {
+      ctx.fillStyle = ink
+      ctx.textAlign = 'center'
+      ctx.font = '700 44px Archivo, sans-serif'
+      ctx.fillText('KODAKEI', offsetX + WIDTH / 2, offsetY + brandY)
+    }
+  } else {
+    // For landscape strip (1800x600):
+    const centerX = offsetX + 1605
+    if (text.qrCode) {
+      const qr = await loadImage(text.qrCode)
+      const qrSize = 160
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(centerX - qrSize / 2, offsetY + 180, qrSize, qrSize)
+      ctx.drawImage(qr, centerX - qrSize / 2 + 6, offsetY + 186, qrSize - 12, qrSize - 12)
+    }
+    if (text.showBrand) {
+      ctx.fillStyle = ink
+      ctx.textAlign = 'center'
+      ctx.font = '700 42px Archivo, sans-serif'
+      ctx.fillText('KODAKEI', centerX, offsetY + 450)
+    }
   }
 }
 
@@ -216,15 +348,18 @@ export async function renderStrip(
   text: StripText = { title: 'GIC BOOTH', showBrand: true },
   customization: CustomizationOptions = {},
 ) {
+  const { width: W, height: H } = getStripDimensions(layout)
+  const isLandscape = W > H
   const canvas = document.createElement('canvas')
-  canvas.width = WIDTH
-  canvas.height = HEIGHT
+  canvas.width = W
+  canvas.height = H
   const ctx = canvas.getContext('2d')!
   const ink = readableTextColor(theme.background)
-  if (theme.singleTemplate) ctx.drawImage(await loadImage(theme.singleTemplate), 0, 0, WIDTH, HEIGHT)
-  else {
+  if (theme.singleTemplate && !isLandscape) {
+    ctx.drawImage(await loadImage(theme.singleTemplate), 0, 0, W, H)
+  } else {
     ctx.fillStyle = theme.background
-    ctx.fillRect(0, 0, WIDTH, HEIGHT)
+    ctx.fillRect(0, 0, W, H)
   }
 
   const images = await Promise.all(photos.slice(0, layout.requiredPhotos).map(loadImage))
@@ -235,20 +370,23 @@ export async function renderStrip(
     drawDecorations(ctx, customization.stickers, customization.doodles)
   }
 
-  if (theme.frame) {
+  if (theme.frame && !isLandscape) {
     const frame = await loadImage(theme.frame)
-    ctx.drawImage(frame, 0, 0, WIDTH, HEIGHT)
+    ctx.drawImage(frame, 0, 0, W, H)
   }
 
-  if (!theme.frame) {
-    if (!theme.singleTemplate) {
-      ctx.fillStyle = theme.accent
-      ctx.fillRect(0, 0, WIDTH, 26)
-      ctx.fillRect(0, HEIGHT - 22, WIDTH, 22)
+  if (!theme.frame && (!theme.singleTemplate || isLandscape)) {
+    ctx.fillStyle = theme.accent
+    if (!isLandscape) {
+      ctx.fillRect(0, 0, W, 26)
+      ctx.fillRect(0, H - 22, W, 22)
+    } else {
+      ctx.fillRect(0, 0, W, 18)
+      ctx.fillRect(0, H - 18, W, 18)
     }
-    drawText(ctx, ink, text)
+    drawText(ctx, ink, text, 0, 0, layout)
   }
-  await drawFooter(ctx, ink, text)
+  await drawFooter(ctx, ink, text, 0, 0, layout)
 
   return canvas.toDataURL('image/png')
 }
@@ -261,8 +399,9 @@ export async function renderThemedPrintCanvas(
   copies: 1 | 2,
   customization: CustomizationOptions = {},
 ) {
-  if (copies === 1 || !theme.doubleTemplate) {
-    return renderPrintCanvas(await renderStrip(layout, theme, photos, text, customization), copies)
+  const isLandscape = layout.orientation === 'landscape' || layout.id.startsWith('landscape')
+  if (copies === 1 || !theme.doubleTemplate || isLandscape) {
+    return renderPrintCanvas(await renderStrip(layout, theme, photos, text, customization), copies, layout)
   }
 
   const canvas = document.createElement('canvas')
@@ -282,14 +421,14 @@ export async function renderThemedPrintCanvas(
     drawDecorations(ctx, customization.stickers, customization.doodles, WIDTH)
   }
 
-  drawText(ctx, ink, text)
-  drawText(ctx, ink, text, WIDTH)
-  await drawFooter(ctx, ink, text)
-  await drawFooter(ctx, ink, text, WIDTH)
+  drawText(ctx, ink, text, 0, 0, layout)
+  drawText(ctx, ink, text, WIDTH, 0, layout)
+  await drawFooter(ctx, ink, text, 0, 0, layout)
+  await drawFooter(ctx, ink, text, WIDTH, 0, layout)
   return canvas.toDataURL('image/png')
 }
 
-export async function renderPrintCanvas(stripSource: string, copies: 1 | 2) {
+export async function renderPrintCanvas(stripSource: string, copies: 1 | 2, layout?: Layout) {
   const canvas = document.createElement('canvas')
   canvas.width = 1200
   canvas.height = 1800
@@ -297,11 +436,52 @@ export async function renderPrintCanvas(stripSource: string, copies: 1 | 2) {
   const strip = await loadImage(stripSource)
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
-  const startX = copies === 1 ? 300 : 0
-  ctx.drawImage(strip, startX, 0, WIDTH, HEIGHT)
-  if (copies === 2) ctx.drawImage(strip, WIDTH, 0, WIDTH, HEIGHT)
+
+  const isLandscape = strip.width > strip.height || layout?.orientation === 'landscape' || layout?.id.startsWith('landscape')
+
+  if (!isLandscape) {
+    const startX = copies === 1 ? 300 : 0
+    ctx.drawImage(strip, startX, 0, WIDTH, HEIGHT)
+    if (copies === 2) ctx.drawImage(strip, WIDTH, 0, WIDTH, HEIGHT)
+  } else {
+    // Landscape 1800x600 strip printed onto 1200x1800 paper:
+    // Rotated 90 degrees so that when printed on standard 4x6 paper with 2x6 vertical cutter,
+    // it yields two 6x2 landscape strips!
+    const drawRotated = (targetX: number) => {
+      ctx.save()
+      ctx.translate(targetX + 600, 0)
+      ctx.rotate(Math.PI / 2)
+      ctx.drawImage(strip, 0, 0, 1800, 600)
+      ctx.restore()
+    }
+    if (copies === 1) {
+      drawRotated(300)
+    } else {
+      drawRotated(0)
+      drawRotated(600)
+    }
+  }
   return canvas.toDataURL('image/png')
 }
+
+export async function renderDoubleStrip(layout: Layout, singleStripDataUrl: string): Promise<string> {
+  const { width: W, height: H } = getStripDimensions(layout)
+  const isLandscape = W > H
+  const canvas = document.createElement('canvas')
+  canvas.width = isLandscape ? W : W * 2
+  canvas.height = isLandscape ? H * 2 : H
+  const ctx = canvas.getContext('2d')!
+  const img = await loadImage(singleStripDataUrl)
+  if (!isLandscape) {
+    ctx.drawImage(img, 0, 0, W, H)
+    ctx.drawImage(img, W, 0, W, H)
+  } else {
+    ctx.drawImage(img, 0, 0, W, H)
+    ctx.drawImage(img, 0, H, W, H)
+  }
+  return canvas.toDataURL('image/png')
+}
+
 
 export function makeDemoPhoto(index: number, aspectRatio = 3 / 4) {
   const canvas = document.createElement('canvas')
@@ -419,13 +599,14 @@ function drawLivePhotos(
   clips: Array<Awaited<ReturnType<typeof loadVideo>>>,
   filter: PhotoFilter = 'none',
   offsetX = 0,
+  offsetY = 0,
 ) {
   const regions = getPhotoRegions(layout)
   clips.forEach((clip, index) => {
     if (!clip) return
     const region = regions[index]
     if (!region) return
-    coverVideo(ctx, clip.video, clip.mirrored, offsetX + region.x, region.y, region.width, region.height, filter)
+    coverVideo(ctx, clip.video, clip.mirrored, offsetX + region.x, offsetY + region.y, region.width, region.height, filter)
   })
 }
 
@@ -442,42 +623,59 @@ export async function renderLiveStripVideos(
   const mimeType = ['video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(type => MediaRecorder.isTypeSupported(type))
   if (!mimeType) return null
 
+  const { width: W, height: H } = getStripDimensions(layout)
+  const isLandscape = W > H
+
   const [singleBase, doubleBase, clips, frame] = await Promise.all([
     renderStrip(layout, theme, selectedPhotos, text, customization).then(loadImage),
-    renderThemedPrintCanvas(layout, theme, selectedPhotos, text, 2, customization).then(loadImage),
+    (!isLandscape
+      ? renderThemedPrintCanvas(layout, theme, selectedPhotos, text, 2, customization).then(loadImage)
+      : Promise.resolve(null)),
     Promise.all(selectedClips.map(loadVideo)),
-    theme.frame ? loadImage(theme.frame) : Promise.resolve(null),
+    theme.frame && !isLandscape ? loadImage(theme.frame) : Promise.resolve(null),
   ])
   if (!clips.some(Boolean)) throw new Error('No captured video is available')
+
   const singleCanvas = document.createElement('canvas')
-  singleCanvas.width = WIDTH
-  singleCanvas.height = HEIGHT
+  singleCanvas.width = W
+  singleCanvas.height = H
   const doubleCanvas = document.createElement('canvas')
-  doubleCanvas.width = WIDTH * 2
-  doubleCanvas.height = HEIGHT
+  doubleCanvas.width = isLandscape ? W : W * 2
+  doubleCanvas.height = isLandscape ? H * 2 : H
   const singleContext = singleCanvas.getContext('2d')!
   const doubleContext = doubleCanvas.getContext('2d')!
 
   const drawSingle = () => {
-    singleContext.drawImage(singleBase, 0, 0, WIDTH, HEIGHT)
+    singleContext.drawImage(singleBase, 0, 0, W, H)
     drawLivePhotos(singleContext, layout, clips, customization.filter || 'none')
     if (customization.stickers?.length || customization.doodles?.length) {
       drawDecorations(singleContext, customization.stickers, customization.doodles)
     }
-    if (frame) singleContext.drawImage(frame, 0, 0, WIDTH, HEIGHT)
+    if (frame && !isLandscape) singleContext.drawImage(frame, 0, 0, W, H)
   }
 
   const drawDouble = () => {
-    doubleContext.drawImage(doubleBase, 0, 0, WIDTH * 2, HEIGHT)
-    drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none')
-    drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none', WIDTH)
-    if (customization.stickers?.length || customization.doodles?.length) {
-      drawDecorations(doubleContext, customization.stickers, customization.doodles)
-      drawDecorations(doubleContext, customization.stickers, customization.doodles, WIDTH)
-    }
-    if (frame) {
-      doubleContext.drawImage(frame, 0, 0, WIDTH, HEIGHT)
-      doubleContext.drawImage(frame, WIDTH, 0, WIDTH, HEIGHT)
+    if (!isLandscape) {
+      doubleContext.drawImage(doubleBase!, 0, 0, W * 2, H)
+      drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none')
+      drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none', W)
+      if (customization.stickers?.length || customization.doodles?.length) {
+        drawDecorations(doubleContext, customization.stickers, customization.doodles)
+        drawDecorations(doubleContext, customization.stickers, customization.doodles, W)
+      }
+      if (frame) {
+        doubleContext.drawImage(frame, 0, 0, W, H)
+        doubleContext.drawImage(frame, W, 0, W, H)
+      }
+    } else {
+      doubleContext.drawImage(singleBase, 0, 0, W, H)
+      doubleContext.drawImage(singleBase, 0, H, W, H)
+      drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none', 0, 0)
+      drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none', 0, H)
+      if (customization.stickers?.length || customization.doodles?.length) {
+        drawDecorations(doubleContext, customization.stickers, customization.doodles, 0, 0)
+        drawDecorations(doubleContext, customization.stickers, customization.doodles, 0, H)
+      }
     }
   }
 
@@ -507,9 +705,16 @@ export async function renderLiveStripVideos(
   }
 
   try {
-    const single = await encode(singleCanvas, 8_000_000, drawSingle, () => singleContext.drawImage(singleBase, 0, 0, WIDTH, HEIGHT))
+    const single = await encode(singleCanvas, 8_000_000, drawSingle, () => singleContext.drawImage(singleBase, 0, 0, W, H))
     onProgress?.(55)
-    const double = await encode(doubleCanvas, 12_000_000, drawDouble, () => doubleContext.drawImage(doubleBase, 0, 0, WIDTH * 2, HEIGHT))
+    const double = await encode(doubleCanvas, 12_000_000, drawDouble, () => {
+      if (!isLandscape) {
+        doubleContext.drawImage(doubleBase!, 0, 0, W * 2, H)
+      } else {
+        doubleContext.drawImage(singleBase, 0, 0, W, H)
+        doubleContext.drawImage(singleBase, 0, H, W, H)
+      }
+    })
     onProgress?.(85)
     return { single, double, mimeType: single.type }
   } finally {
@@ -523,3 +728,4 @@ export async function renderLiveStripVideos(
     })
   }
 }
+

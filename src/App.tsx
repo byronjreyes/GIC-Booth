@@ -21,7 +21,9 @@ import {
 import QRCode from 'qrcode'
 import {
   getPhotoAspectRatio,
+  getStripDimensions,
   makeDemoPhoto,
+  renderDoubleStrip,
   renderLiveStripVideos,
   renderStrip,
   renderThemedPrintCanvas,
@@ -51,8 +53,12 @@ type CapturedMoment = { photo: string; clip: Blob | null; mirrored: boolean }
 
 const layouts: Layout[] = [
   { id: 'classic-4', name: 'Classic 4 Cut', requiredPhotos: 4, description: '4 moments · 2 × 6 in' },
+  { id: 'tight-4', name: 'Minimal 4 Cut', requiredPhotos: 4, description: '4 moments · little spaces · 2 × 6 in', orientation: 'portrait' },
   { id: 'classic-3', name: 'Classic 3 Cut', requiredPhotos: 3, description: '3 moments · 2 × 6 in' },
+  { id: 'tight-3', name: 'Minimal 3 Cut', requiredPhotos: 3, description: '3 moments · little spaces · 2 × 6 in', orientation: 'portrait' },
   { id: 'classic-2', name: 'Classic 2 Cut', requiredPhotos: 2, description: '2 large moments · 2 × 6 in' },
+  { id: 'landscape-3', name: 'Landscape 3 Cut', requiredPhotos: 3, description: '3 moments · horizontal · 6 × 2 in', orientation: 'landscape' },
+  { id: 'landscape-4', name: 'Landscape 4 Cut', requiredPhotos: 4, description: '4 moments · horizontal · 6 × 2 in', orientation: 'landscape' },
   { id: 'grid-4', name: '2×2 Grid', requiredPhotos: 4, description: '4 moments · 2×2 grid' },
 ]
 
@@ -125,6 +131,20 @@ function StripDiagram({ layout }: { layout: Layout }) {
       </div>
     )
   }
+  if (layout.orientation === 'landscape' || layout.id.startsWith('landscape-')) {
+    return (
+      <div className="strip-diagram landscape">
+        {Array.from({ length: layout.requiredPhotos }, (_, index) => <i key={index} />)}
+      </div>
+    )
+  }
+  if (layout.id.startsWith('tight-')) {
+    return (
+      <div className="strip-diagram tight">
+        {Array.from({ length: layout.requiredPhotos }, (_, index) => <i key={index} />)}
+      </div>
+    )
+  }
   return (
     <div className="strip-diagram">
       {Array.from({ length: layout.requiredPhotos }, (_, index) => <i key={index} />)}
@@ -136,6 +156,8 @@ function App() {
   const currentSettings = useRef<BoothSettings>(getSettings())
   const [step, setStep] = useState<Step>('welcome')
   const [layout, setLayout] = useState<Layout>(layouts[0])
+  const { width: stripWidth, height: stripHeight } = getStripDimensions(layout)
+  const isLandscape = stripWidth > stripHeight
   const [timer, setTimer] = useState(() => currentSettings.current.defaultTimer || 3)
   const [availableThemes, setAvailableThemes] = useState<Theme[]>(builtInThemes)
   const [photos, setPhotos] = useState<string[]>([])
@@ -147,6 +169,7 @@ function App() {
   const [result, setResult] = useState('')
   const [singlePrint, setSinglePrint] = useState('')
   const [doublePrint, setDoublePrint] = useState('')
+  const [doublePreview, setDoublePreview] = useState('')
   const [activeTheme, setActiveTheme] = useState<Theme | null>(null)
   const [stripTitle, setStripTitle] = useState(() => currentSettings.current.brandTitle || 'GIC BOOTH')
   const [hasPrinted, setHasPrinted] = useState(false)
@@ -183,6 +206,7 @@ function App() {
     customization: CustomizationOptions
     preview: string
     doublePrint: string
+    doublePreview: string
     revision: string
     layout: Layout
   } | null>(null)
@@ -310,6 +334,7 @@ function App() {
     setResult('')
     setSinglePrint('')
     setDoublePrint('')
+    setDoublePreview('')
     setActiveTheme(null)
     setStripTitle(currentSettings.current.brandTitle || 'GIC BOOTH')
     setShowBrand(true)
@@ -435,6 +460,10 @@ function App() {
     setPreview(nextPreview)
     setSinglePrint(nextSinglePrint)
     setDoublePrint(nextDoublePrint)
+    const nextDoublePreview = isLandscape
+      ? await renderDoubleStrip(layout, nextPreview)
+      : nextDoublePrint
+    setDoublePreview(nextDoublePreview)
     setCopies(nextCopies)
     setResult(nextCopies === 1 ? nextSinglePrint : nextDoublePrint)
 
@@ -446,6 +475,7 @@ function App() {
       customization,
       preview: nextPreview,
       doublePrint: nextDoublePrint,
+      doublePreview: nextDoublePreview,
       revision,
       layout,
     }
@@ -491,7 +521,9 @@ function App() {
       // 1. Immediately upload images so phone scanning QR can view photo strip right away
       await saveShare(sid, {
         singleImage: design.preview,
-        doubleImage: design.doublePrint,
+        doubleImage: (design.layout.orientation === 'landscape' || design.layout.id.startsWith('landscape'))
+          ? design.doublePreview
+          : design.doublePrint,
         generating: true,
         progress: 25,
         revision: targetRevision,
@@ -652,8 +684,8 @@ function App() {
     const newSticker: PlacedSticker = {
       id: createId(),
       emoji,
-      x: 300,
-      y: 900 + (Math.random() * 200 - 100),
+      x: Math.round(stripWidth / 2),
+      y: Math.round(stripHeight / 2 + (Math.random() * 200 - 100)),
       size: 72,
       rotation: 0,
     }
@@ -711,11 +743,11 @@ function App() {
     const rect = previewWrapperRef.current.getBoundingClientRect()
     if (!rect.width || !rect.height) return
 
-    const scaleX = 600 / rect.width
-    const scaleY = 1800 / rect.height
+    const scaleX = stripWidth / rect.width
+    const scaleY = stripHeight / rect.height
 
-    const nextX = Math.round(Math.max(25, Math.min(575, drag.startX + dx * scaleX)))
-    const nextY = Math.round(Math.max(25, Math.min(1775, drag.startY + dy * scaleY)))
+    const nextX = Math.round(Math.max(25, Math.min(stripWidth - 25, drag.startX + dx * scaleX)))
+    const nextY = Math.round(Math.max(25, Math.min(stripHeight - 25, drag.startY + dy * scaleY)))
 
     setStickers(prev => prev.map(s => s.id === drag.id ? { ...s, x: nextX, y: nextY } : s))
   }
@@ -748,8 +780,8 @@ function App() {
     } catch {}
 
     const rect = previewWrapperRef.current.getBoundingClientRect()
-    const centerClientX = rect.left + (sticker.x / 600) * rect.width
-    const centerClientY = rect.top + (sticker.y / 1800) * rect.height
+    const centerClientX = rect.left + (sticker.x / stripWidth) * rect.width
+    const centerClientY = rect.top + (sticker.y / stripHeight) * rect.height
 
     const initialAngle = Math.atan2(e.clientY - centerClientY, e.clientX - centerClientX) * (180 / Math.PI)
     const startRotation = sticker.rotation || 0
@@ -809,8 +841,8 @@ function App() {
     } catch {}
 
     const rect = previewWrapperRef.current.getBoundingClientRect()
-    const centerClientX = rect.left + (sticker.x / 600) * rect.width
-    const centerClientY = rect.top + (sticker.y / 1800) * rect.height
+    const centerClientX = rect.left + (sticker.x / stripWidth) * rect.width
+    const centerClientY = rect.top + (sticker.y / stripHeight) * rect.height
     const initialDist = Math.hypot(e.clientX - centerClientX, e.clientY - centerClientY)
 
     resizingSticker.current = {
@@ -858,19 +890,19 @@ function App() {
     const canvas = doodleCanvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
-    const x = (e.clientX - rect.left) * (600 / rect.width)
-    const y = (e.clientY - rect.top) * (1800 / rect.height)
+    const x = (e.clientX - rect.left) * (stripWidth / rect.width)
+    const y = (e.clientY - rect.top) * (stripHeight / rect.height)
     isPointerDrawing.current = true
     activeStroke.current = [{ x, y }]
 
     const ctx = canvas.getContext('2d')
     if (ctx) {
       ctx.strokeStyle = selectedPenColor
-      ctx.lineWidth = selectedPenSize * (canvas.width / 600)
+      ctx.lineWidth = selectedPenSize * (canvas.width / stripWidth)
       ctx.lineCap = 'round'
       ctx.lineJoin = 'round'
       ctx.beginPath()
-      ctx.moveTo(x * (canvas.width / 600), y * (canvas.height / 1800))
+      ctx.moveTo(x * (canvas.width / stripWidth), y * (canvas.height / stripHeight))
     }
   }
 
@@ -879,13 +911,13 @@ function App() {
     const canvas = doodleCanvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
-    const x = (e.clientX - rect.left) * (600 / rect.width)
-    const y = (e.clientY - rect.top) * (1800 / rect.height)
+    const x = (e.clientX - rect.left) * (stripWidth / rect.width)
+    const y = (e.clientY - rect.top) * (stripHeight / rect.height)
     activeStroke.current.push({ x, y })
 
     const ctx = canvas.getContext('2d')
     if (ctx) {
-      ctx.lineTo(x * (canvas.width / 600), y * (canvas.height / 1800))
+      ctx.lineTo(x * (canvas.width / stripWidth), y * (canvas.height / stripHeight))
       ctx.stroke()
     }
   }
@@ -928,8 +960,8 @@ function App() {
 
   const download = () => {
     const anchor = document.createElement('a')
-    anchor.href = copies === 1 ? preview : result
-    anchor.download = `gic-booth-${copies === 1 ? '2x6-single' : '4x6-double'}-${Date.now()}.png`
+    anchor.href = copies === 1 ? preview : (isLandscape ? doublePreview : result)
+    anchor.download = `gic-booth-${copies === 1 ? 'single' : 'double'}-${Date.now()}.png`
     anchor.click()
     track('download_completed', { copies })
   }
@@ -985,13 +1017,26 @@ function App() {
       )}
 
       {step === 'welcome' && (
-        <button className="welcome" onClick={beginSession}>
-          <span className="brand" onClick={handleBrandTap} title="GIC BOOTH">
-            {currentSettings.current.brandTitle || 'GIC BOOTH'}
+        <button className="welcome welcome-editorial" onClick={beginSession} aria-label="Touch anywhere to start your photo strip">
+          <span className="welcome-topline">
+            <span>Photo studio</span>
+            <span className="brand" onClick={handleBrandTap} title="KODAKEI">
+              {currentSettings.current.brandTitle || 'KODAKEI'}
+            </span>
+            <Camera aria-hidden="true" />
           </span>
-          <span className="welcome-strip" aria-hidden="true"><b /><b /><b /><b /></span>
-          <strong>Make your<br />photo strip.</strong>
-          <span className="start-prompt">Touch anywhere to start</span>
+          <span className="welcome-heading">
+            <strong>Your moments,<br /><em>beautifully kept.</em></strong>
+            <span className="welcome-subtitle">A little strip of you, together.</span>
+          </span>
+          <span className="start-prompt">Touch to start <ArrowLeft className="start-arrow" aria-hidden="true" /></span>
+          <span className="welcome-photo-row" aria-hidden="true">
+            <img src="/welcome-friends.jpg" alt="" />
+            <img src="/welcome-portrait.jpg" alt="" />
+            <img src="/welcome-smile.jpg" alt="" fetchPriority="high" />
+            <img src="/welcome-together.jpg" alt="" />
+            <img src="/welcome-friends.jpg" alt="" />
+          </span>
         </button>
       )}
 
@@ -1057,16 +1102,16 @@ function App() {
 
       {step === 'result' && (
         <section className="screen result-screen">
-          <div className="result-copy"><Sparkles /><h1>Edit your<br />strip.</h1></div>
+          <header className="result-copy"><h1>Edit your strip.</h1><span>{layout.requiredPhotos} photos</span></header>
           <div className="result-viewer">
 
             {/* Sub-tabs for Themes, Filters, Stickers, Doodles */}
             <div className="result-editor-panel">
-              <div className="result-tabs" role="tablist">
-                <button className={`result-tab ${customTab === 'themes' ? 'active' : ''}`} onClick={() => setCustomTab('themes')}><Palette /> Themes</button>
-                <button className={`result-tab ${customTab === 'filters' ? 'active' : ''}`} onClick={() => setCustomTab('filters')}><Sparkles /> Filters</button>
-                <button className={`result-tab ${customTab === 'stickers' ? 'active' : ''}`} onClick={() => setCustomTab('stickers')}><Smile /> Stickers</button>
-                <button className={`result-tab ${customTab === 'doodles' ? 'active' : ''}`} onClick={() => setCustomTab('doodles')}><Edit3 /> Doodle</button>
+              <div className="result-tabs" role="group" aria-label="Editing tools">
+                <button aria-pressed={customTab === 'themes'} className={`result-tab ${customTab === 'themes' ? 'active' : ''}`} onClick={() => setCustomTab('themes')}><Palette /> Themes</button>
+                <button aria-pressed={customTab === 'filters'} className={`result-tab ${customTab === 'filters' ? 'active' : ''}`} onClick={() => setCustomTab('filters')}><Sparkles /> Filters</button>
+                <button aria-pressed={customTab === 'stickers'} className={`result-tab ${customTab === 'stickers' ? 'active' : ''}`} onClick={() => setCustomTab('stickers')}><Smile /> Stickers</button>
+                <button aria-pressed={customTab === 'doodles'} className={`result-tab ${customTab === 'doodles' ? 'active' : ''}`} onClick={() => setCustomTab('doodles')}><Edit3 /> Doodle</button>
               </div>
 
               {/* 1. THEMES TAB */}
@@ -1077,6 +1122,7 @@ function App() {
                       <button
                         key={cat}
                         className={`pill-mini ${themeCategory === cat ? 'active' : ''}`}
+                        aria-pressed={themeCategory === cat}
                         onClick={() => setThemeCategory(cat)}
                       >
                         {cat}
@@ -1205,14 +1251,19 @@ function App() {
             {/* PREVIEW STAGE WITH INTERACTIVE DRAWING & STICKERS */}
             <div className="result-preview" onClick={() => setSelectedStickerId(null)}>
               <div
-                className="preview-canvas-wrapper"
+                className={`preview-canvas-wrapper ${isLandscape ? 'landscape' : ''}`}
                 ref={previewWrapperRef}
+                style={{
+                  aspectRatio: copies === 2
+                    ? (isLandscape ? '3 / 2' : '2 / 3')
+                    : (isLandscape ? '3 / 1' : '1 / 3')
+                }}
                 onClick={() => setSelectedStickerId(null)}
               >
                 <img
-                  className={`result-strip ${copies === 2 ? 'double' : ''}`}
-                  src={copies === 2 ? result : (cleanPreview || preview)}
-                  alt={`${copies === 2 ? 'Double 4 by 6' : 'Single 2 by 6'} photo strip preview`}
+                  className={`result-strip ${copies === 2 ? 'double' : ''} ${isLandscape ? 'landscape' : ''}`}
+                  src={copies === 2 ? (isLandscape ? doublePreview : result) : (cleanPreview || preview)}
+                  alt={`${copies === 2 ? 'Double' : 'Single'} photo strip preview`}
                   draggable={false}
                 />
 
@@ -1237,8 +1288,8 @@ function App() {
                         key={sticker.id}
                         className={`draggable-sticker ${selectedStickerId === sticker.id ? 'active' : ''}`}
                         style={{
-                          left: `${(sticker.x / 600) * 100}%`,
-                          top: `${(sticker.y / 1800) * 100}%`,
+                          left: `${(sticker.x / stripWidth) * 100}%`,
+                          top: `${(sticker.y / stripHeight) * 100}%`,
                           transform: `translate(-50%, -50%) rotate(${sticker.rotation || 0}deg)`,
                         }}
                         onPointerDown={e => handleStickerPointerDown(e, sticker.id)}
@@ -1252,7 +1303,7 @@ function App() {
                         <span
                           className="sticker-emoji"
                           style={{
-                            fontSize: `${Math.max(16, Math.round(sticker.size * (wrapperWidth / 600)))}px`,
+                            fontSize: `${Math.max(16, Math.round(sticker.size * (wrapperWidth / stripWidth)))}px`,
                           }}
                         >
                           {sticker.emoji}
@@ -1325,8 +1376,8 @@ function App() {
                   <canvas
                     ref={doodleCanvasRef}
                     className="doodle-overlay-canvas"
-                    width={600}
-                    height={1800}
+                    width={stripWidth}
+                    height={stripHeight}
                     onPointerDown={handleDoodlePointerDown}
                     onPointerMove={handleDoodlePointerMove}
                     onPointerUp={handleDoodlePointerUp}
@@ -1340,7 +1391,7 @@ function App() {
           <img className="print-canvas" src={result} alt="" aria-hidden="true" />
           <div className="result-actions">
             <div className="strip-customization">
-              <label>Top text<input type="text" maxLength={30} value={stripTitle} onChange={event => customizeStrip(event.target.value, showBrand)} /></label>
+              <label>Strip title<input type="text" maxLength={30} value={stripTitle} onChange={event => customizeStrip(event.target.value, showBrand)} /></label>
               <label className="brand-option"><input type="checkbox" checked={showBrand} onChange={event => customizeStrip(stripTitle, event.target.checked)} />Show KODAKEI brand</label>
             </div>
             <div className="print-options">
