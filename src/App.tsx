@@ -1275,12 +1275,12 @@ function CaptureScreen({ timer, total, aspectRatio, onDone }: { timer: number; t
   }, [soundEnabled, timer])
 
   const openCamera = useCallback(async (deviceId?: string) => {
-    if (!window.isSecureContext) {
-      setCameraError('Camera needs HTTPS. Open the secure booth link, or use localhost on this PC.')
-      return setStatus('error')
-    }
-    if (!navigator.mediaDevices) {
-      setCameraError('This browser does not provide camera access.')
+    if (!navigator.mediaDevices?.getUserMedia) {
+      if (!window.isSecureContext) {
+        setCameraError('Camera requires a Secure Context (HTTPS or localhost). If opening over LAN IP (http://192.168.x.x), run "npm run dev:https" or add the IP to chrome://flags/#unsafely-treat-insecure-origin-as-secure')
+      } else {
+        setCameraError('This browser does not provide camera access.')
+      }
       return setStatus('error')
     }
     setStatus('loading')

@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -152,7 +153,14 @@ const sharePlugin = {
   configurePreviewServer(server: { middlewares: { use: (handler: typeof shareMiddleware) => void } }) { server.middlewares.use(shareMiddleware) },
 }
 
-export default defineConfig({
-  plugins: [react(), sharePlugin],
-  preview: { allowedHosts: ['.trycloudflare.com'] },
+export default defineConfig(() => {
+  const enableHttps = process.env.HTTPS === 'true' || process.argv.includes('--https')
+  return {
+    plugins: [
+      react(),
+      sharePlugin,
+      ...(enableHttps ? [basicSsl()] : []),
+    ],
+    preview: { allowedHosts: ['.trycloudflare.com'] },
+  }
 })

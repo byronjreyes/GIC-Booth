@@ -1060,6 +1060,10 @@ function CameraView() {
 
   const startPreview = useCallback(async (deviceId?: string) => {
     streamRef.current?.getTracks().forEach(t => t.stop())
+    if (!navigator.mediaDevices?.getUserMedia) {
+      console.warn('Camera is unavailable (insecure origin or blocked).')
+      return
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' },
