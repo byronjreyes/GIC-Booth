@@ -537,6 +537,228 @@ h1 { font-family: 'Barlow Condensed', sans-serif; font-size: clamp(64px, 9vw, 13
 .detail-row { display: flex; justify-content: space-between; border-bottom: 1px solid #eee; padding: 6px 0; }
 .modal-footer { display: flex; justify-content: flex-end; margin-top: 8px; }
 
+/* QR Share Modal */
+.qr-modal-backdrop {
+  backdrop-filter: blur(5px);
+  padding: 16px;
+}
+.qr-modal-card {
+  width: min(420px, 92vw);
+  background: white;
+  border: 3px solid #171717;
+  padding: 24px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  display: grid;
+  gap: 16px;
+  text-align: center;
+  animation: qrModalPop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes qrModalPop {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+.qr-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 2px solid #171717;
+  padding-bottom: 12px;
+}
+.qr-modal-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.qr-modal-title-icon {
+  width: 26px;
+  height: 26px;
+  color: var(--red);
+}
+.qr-modal-header h2 {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 28px;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.qr-close-btn {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  color: #555;
+  transition: color 0.15s ease;
+}
+.qr-close-btn:hover {
+  color: #171717;
+}
+.qr-close-btn svg {
+  width: 22px;
+  height: 22px;
+}
+.qr-modal-body {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+}
+.qr-code-frame {
+  background: white;
+  border: 2px solid #171717;
+  padding: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  display: grid;
+  place-items: center;
+  width: min(240px, 68vw);
+  aspect-ratio: 1;
+}
+.qr-code-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+.qr-code-placeholder {
+  font-size: 13px;
+  color: #888;
+  font-weight: 700;
+}
+.qr-modal-instructions {
+  font-size: 13px;
+  color: #444;
+  line-height: 1.4;
+  margin: 0;
+  max-width: 320px;
+}
+.qr-status-box {
+  width: 100%;
+  min-height: 48px;
+  display: grid;
+  align-items: center;
+}
+.qr-progress-wrap {
+  background: #faf9f5;
+  border: 1px solid #ddd;
+  padding: 10px 14px;
+  border-radius: 4px;
+  display: grid;
+  gap: 6px;
+}
+.qr-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 700;
+  color: #333;
+}
+.qr-progress-label strong {
+  color: var(--red);
+}
+.qr-progress-bar {
+  width: 100%;
+  height: 8px;
+  background: #eee;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.qr-progress-fill {
+  height: 100%;
+  background: var(--red);
+  transition: width 0.3s ease;
+}
+.qr-progress-tip {
+  font-size: 11px;
+  color: #777;
+}
+.qr-ready-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #dcefe6;
+  color: #173f38;
+  border: 1px solid #b7e2cb;
+  padding: 8px 14px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.badge-check-icon {
+  width: 16px;
+  height: 16px;
+  color: #173f38;
+}
+.qr-error-box {
+  background: #fde3df;
+  border: 1px solid #f9c1b9;
+  padding: 10px;
+  border-radius: 4px;
+  display: grid;
+  gap: 8px;
+  color: #8f211a;
+  font-size: 12px;
+}
+.qr-error-box p {
+  margin: 0;
+  font-weight: 700;
+}
+.retry-btn {
+  justify-self: center;
+  min-height: 34px !important;
+  font-size: 12px !important;
+  padding: 0 12px !important;
+}
+.qr-link-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.qr-link-input {
+  flex: 1;
+  min-height: 40px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-family: inherit;
+  border: 2px solid #171717;
+  background: #faf9f5;
+  color: #555;
+  outline: none;
+}
+.qr-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  min-height: 40px;
+  background: #171717;
+  color: white;
+  border: 0;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.qr-copy-btn:hover {
+  background: #333;
+}
+.qr-copy-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.qr-modal-footer {
+  display: flex;
+  justify-content: center;
+  margin-top: 4px;
+}
+.qr-modal-done-btn {
+  min-width: 140px;
+  min-height: 46px;
+}
+
+
 /* Designs layout */
 .design-workspace { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 28px; align-items: start; }
 .design-form { padding: 24px; background: white; display: grid; gap: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }

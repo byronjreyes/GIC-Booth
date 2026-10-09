@@ -20,6 +20,29 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Invalid share ID' })
   }
 
+  if (req.query.scan || req.url.includes('/scan')) {
+    if (req.method === 'POST') {
+      try {
+        await supabase.from('settings').upsert({
+          booth_id: 'booth-01',
+          key: `scan:${id}`,
+          value: { id, scannedAt: new Date().toISOString() },
+        })
+        return res.status(200).json({ ok: true })
+      } catch (err) {
+        return res.status(500).json({ error: err.message || 'Server error' })
+      }
+    }
+    if (req.method === 'GET') {
+      try {
+        const { data } = await supabase.from('settings').select('key').eq('key', `scan:${id}`).maybeSingle()
+        return res.status(200).json({ scanned: Boolean(data) })
+      } catch (err) {
+        return res.status(500).json({ error: err.message || 'Server error' })
+      }
+    }
+  }
+
   if (req.method === 'GET') {
     try {
       const { data, error } = await supabase

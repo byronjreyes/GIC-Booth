@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Download } from 'lucide-react'
-import { getShare, type ShareData } from './shares'
+import { getShare, notifyShareScanned, type ShareData } from './shares'
 
 export default function Share() {
   const id = window.location.pathname.split('/')[2] || ''
@@ -23,8 +23,11 @@ export default function Share() {
   }, [id])
 
   useEffect(() => {
+    if (id) {
+      void notifyShareScanned(id)
+    }
     void load()
-  }, [load])
+  }, [id, load])
 
   useEffect(() => {
     if (share?.video || Date.now() - openedAt.current > 120_000) return

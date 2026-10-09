@@ -2,12 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   Camera,
+  Check,
+  Copy,
   Download,
   Edit3,
   Eraser,
   Maximize2,
   Palette,
   Printer,
+  QrCode,
   RefreshCw,
   RotateCw,
   Smile,
@@ -40,7 +43,7 @@ import {
   silentPrint,
   type BoothSettings,
 } from './platform'
-import { saveShare } from './shares'
+import { checkShareScanned, saveShare } from './shares'
 
 type Step = 'welcome' | 'layout' | 'timer' | 'camera' | 'photos' | 'result'
 type CustomTab = 'themes' | 'filters' | 'stickers' | 'doodles'
@@ -160,12 +163,29 @@ function App() {
   const [selectedPenSize, setSelectedPenSize] = useState<number>(8)
 
   const [error, setError] = useState('')
+  const [showQrModal, setShowQrModal] = useState(false)
+  const [copiedLink, setCopiedLink] = useState(false)
+  const [shareStatus, setShareStatus] = useState<'idle' | 'preparing' | 'ready' | 'error'>('idle')
+  const [shareError, setShareError] = useState('')
   const [shareProgress, setShareProgress] = useState<number | null>(null)
   const lastAction = useRef(Date.now())
   const sessionId = useRef('')
   const renderVersion = useRef(0)
   const shareId = useRef('')
   const shareQr = useRef('')
+  const shareUrl = useRef('')
+  const uploadedRevision = useRef('')
+  const isUploading = useRef(false)
+  const latestDesignRef = useRef<{
+    theme: Theme
+    chosenPhotos: string[]
+    text: { title: string; showBrand: boolean; qrCode: string }
+    customization: CustomizationOptions
+    preview: string
+    doublePrint: string
+    revision: string
+    layout: Layout
+  } | null>(null)
   const previewWrapperRef = useRef<HTMLDivElement>(null)
   const doodleCanvasRef = useRef<HTMLCanvasElement>(null)
   const activeStroke = useRef<DoodlePoint[]>([])
@@ -308,6 +328,15 @@ function App() {
     renderVersion.current += 1
     shareId.current = ''
     shareQr.current = ''
+    shareUrl.current = ''
+    uploadedRevision.current = ''
+    isUploading.current = false
+    latestDesignRef.current = null
+    setShowQrModal(false)
+    setCopiedLink(false)
+    setShareStatus('idle')
+    setShareError('')
+    setShareProgress(null)
     sessionId.current = ''
   }, [])
 
@@ -382,7 +411,9 @@ function App() {
           baseUrl = 'https://gic-booth.vercel.app'
         }
       }
-      shareQr.current = await QRCode.toDataURL(`${baseUrl}/share/${shareId.current}`, { width: 256, margin: 1 })
+      const url = `${baseUrl}/share/${shareId.current}`
+      shareUrl.current = url
+      shareQr.current = await QRCode.toDataURL(url, { width: 320, margin: 2 })
     }
     const text = { title, showBrand: brand, qrCode: shareQr.current }
     const customization: CustomizationOptions = {
@@ -407,93 +438,184 @@ function App() {
     setCopies(nextCopies)
     setResult(nextCopies === 1 ? nextSinglePrint : nextDoublePrint)
 
-    // Clear previous pending video generation
+    // Store latest design configuration for on-demand share preparation
+    latestDesignRef.current = {
+      theme,
+      chosenPhotos,
+      text,
+      customization,
+      preview: nextPreview,
+      doublePrint: nextDoublePrint,
+      revision,
+      layout,
+    }
+
+    // Design changed: mark upload status idle so next QR open/scan/print uploads this updated revision
+    if (uploadedRevision.current && uploadedRevision.current !== revision) {
+      setShareStatus('idle')
+      setShareProgress(null)
+    }
+
+    // Clear previous pending debounce timer
     if (videoDebounceTimer.current) {
       window.clearTimeout(videoDebounceTimer.current)
       videoDebounceTimer.current = null
     }
 
-    // If initial load or video is not ready yet, set starting progress
-    if (debounceVideoMs === 0 && shareProgress === null) {
-      setShareProgress(15)
+    return true
+  }
+
+  const prepareShare = useCallback(async (force = false) => {
+    const design = latestDesignRef.current
+    if (!design || !shareId.current) return
+
+    // If this revision is already uploaded and ready, skip unless forced
+    if (!force && uploadedRevision.current === design.revision && shareStatus === 'ready') {
+      return
     }
 
-    const executeShareAndVideo = async () => {
-      try {
-        if (version !== renderVersion.current) return
-        await saveShare(shareId.current, {
-          singleImage: nextPreview,
-          doubleImage: nextDoublePrint,
-          generating: true,
-          progress: 20,
-          revision,
-        })
-      } catch {
-        if (version === renderVersion.current) {
-          setError('QR sharing is unavailable. The strip can still be downloaded.')
-        }
+    // If already in progress for this revision, skip
+    if (isUploading.current && uploadedRevision.current === design.revision) {
+      return
+    }
+
+    const targetRevision = design.revision
+    const sid = shareId.current
+    isUploading.current = true
+    uploadedRevision.current = targetRevision
+    setShareError('')
+    setShareStatus('preparing')
+    setShareProgress(20)
+
+    try {
+      // 1. Immediately upload images so phone scanning QR can view photo strip right away
+      await saveShare(sid, {
+        singleImage: design.preview,
+        doubleImage: design.doublePrint,
+        generating: true,
+        progress: 25,
+        revision: targetRevision,
+      })
+
+      if (latestDesignRef.current?.revision !== targetRevision) {
+        isUploading.current = false
         return
       }
 
+      setShareProgress(25)
+
+      // 2. Check for live photo clips
       const selectedClips = selected.map(index => clips[index])
       const hasLiveClips = selectedClips.some(clip => clip?.blob)
 
       if (!hasLiveClips) {
-        if (version === renderVersion.current) {
+        if (latestDesignRef.current?.revision === targetRevision) {
           setShareProgress(100)
-          void saveShare(shareId.current, { ready: true, progress: 100, revision, videoError: 'Live photo clips not available' }).catch(() => {})
+          setShareStatus('ready')
+          void saveShare(sid, {
+            ready: true,
+            progress: 100,
+            revision: targetRevision,
+            videoError: 'Live photo clips not available',
+          }).catch(() => {})
         }
+        isUploading.current = false
         return
       }
 
-      try {
-        if (version !== renderVersion.current) return
-        setShareProgress(25)
-        void saveShare(shareId.current, { progress: 25, revision }).catch(() => {})
+      // 3. Render and upload animated live strip video
+      setShareProgress(30)
+      void saveShare(sid, { progress: 30, revision: targetRevision }).catch(() => {})
 
-        const videos = await renderLiveStripVideos(
-          layout,
-          theme,
-          selectedClips,
-          chosenPhotos,
-          text,
-          progress => {
-            if (version === renderVersion.current) {
-              setShareProgress(progress)
-              void saveShare(shareId.current, { progress, revision }).catch(() => {})
-            }
-          },
-          customization,
-        )
+      const videos = await renderLiveStripVideos(
+        design.layout,
+        design.theme,
+        selectedClips,
+        design.chosenPhotos,
+        design.text,
+        progress => {
+          if (latestDesignRef.current?.revision === targetRevision) {
+            setShareProgress(progress)
+            void saveShare(sid, { progress, revision: targetRevision }).catch(() => {})
+          }
+        },
+        design.customization,
+      )
 
-        if (version !== renderVersion.current) return
-        if (!videos) throw new Error('Video encoding is unavailable')
-
-        const [singleVideo, doubleVideo] = await Promise.all([blobToDataUrl(videos.single), blobToDataUrl(videos.double)])
-        if (version !== renderVersion.current) return
-
-        await saveShare(shareId.current, { progress: 90, revision })
-        setShareProgress(90)
-        await saveShare(shareId.current, { singleVideo, doubleVideo, videoMime: videos.mimeType, ready: true, revision })
-        if (version === renderVersion.current) setShareProgress(100)
-      } catch (reason) {
-        if (version !== renderVersion.current) return
-        const videoError = reason instanceof Error ? reason.message : 'Video generation failed'
-        setShareProgress(100)
-        void saveShare(shareId.current, { ready: true, progress: 100, revision, videoError }).catch(() => {})
+      if (latestDesignRef.current?.revision !== targetRevision) {
+        isUploading.current = false
+        return
       }
-    }
 
-    if (debounceVideoMs > 0) {
-      videoDebounceTimer.current = window.setTimeout(() => {
-        void executeShareAndVideo()
-      }, debounceVideoMs)
-    } else {
-      void executeShareAndVideo()
-    }
+      if (!videos) throw new Error('Video encoding is unavailable')
 
-    return true
-  }
+      const [singleVideo, doubleVideo] = await Promise.all([
+        blobToDataUrl(videos.single),
+        blobToDataUrl(videos.double),
+      ])
+
+      if (latestDesignRef.current?.revision !== targetRevision) {
+        isUploading.current = false
+        return
+      }
+
+      await saveShare(sid, { progress: 95, revision: targetRevision })
+      setShareProgress(95)
+      await saveShare(sid, {
+        singleVideo,
+        doubleVideo,
+        videoMime: videos.mimeType,
+        ready: true,
+        progress: 100,
+        revision: targetRevision,
+      })
+
+      if (latestDesignRef.current?.revision === targetRevision) {
+        setShareProgress(100)
+        setShareStatus('ready')
+      }
+    } catch (reason) {
+      if (latestDesignRef.current?.revision === targetRevision) {
+        const errorMsg = reason instanceof Error ? reason.message : 'QR preparation failed'
+        console.error('prepareShare error:', reason)
+        setShareError(errorMsg)
+        setShareStatus('error')
+        void saveShare(sid, {
+          ready: true,
+          progress: 100,
+          revision: targetRevision,
+          videoError: errorMsg,
+        }).catch(() => {})
+      }
+    } finally {
+      isUploading.current = false
+    }
+  }, [clips, selected, shareStatus])
+
+  // Listen for QR scan ping while in result step so scanned strips prepare automatically
+  useEffect(() => {
+    if (step !== 'result' || !shareId.current) return
+    let active = true
+
+    const interval = window.setInterval(async () => {
+      if (!active) return
+      if (uploadedRevision.current === latestDesignRef.current?.revision && shareStatus === 'ready') {
+        return
+      }
+      try {
+        const scanned = await checkShareScanned(shareId.current)
+        if (scanned && active) {
+          void prepareShare()
+        }
+      } catch {}
+    }, 2500)
+
+    return () => {
+      active = false
+      window.clearInterval(interval)
+    }
+  }, [step, shareStatus, prepareShare])
+
 
   const chooseTheme = async (theme: Theme, nextCopies: 1 | 2 = 1) => {
     setError('')
@@ -815,6 +937,7 @@ function App() {
   const print = useCallback(async () => {
     track('print_requested', { copies })
     setHasPrinted(true)
+    void prepareShare().catch(console.error)
     try {
       if (currentSettings.current.silentPrintEnabled) {
         await silentPrint(result, currentSettings.current.printerName, copies)
@@ -825,7 +948,7 @@ function App() {
       console.warn('Silent print error, falling back to window.print:', err)
       window.print()
     }
-  }, [copies, result, track])
+  }, [copies, result, track, prepareShare])
 
   // Automatically print when entering 'result' step if printMode is configured to 'auto'
   useEffect(() => {
@@ -1227,7 +1350,17 @@ function App() {
                 <button className={copies === 2 ? 'active' : ''} aria-pressed={copies === 2} onClick={() => chooseCopies(2)}>Double</button>
               </div>
             </div>
-            <button className="primary" onClick={download}><Download />Download</button>
+            <button
+              className="primary qr-button"
+              onClick={() => {
+                setShowQrModal(true)
+                void prepareShare()
+              }}
+            >
+              <QrCode />
+              Get QR Code
+            </button>
+            <button className="secondary" onClick={download}><Download />Download</button>
             <button
               className="secondary print-button"
               disabled={hasPrinted && !currentSettings.current.allowReprint}
@@ -1238,14 +1371,123 @@ function App() {
             </button>
             <button className="secondary" onClick={startOver}><RefreshCw />Start over</button>
             {error && <p className="error" role="alert">{error}</p>}
-            {shareProgress !== null && <p role="status">{shareProgress === 100 ? 'QR image and video ready' : `Preparing QR downloads: ${shareProgress}%. Keep this page open.`}</p>}
-            {error && activeTheme && <button className="secondary" onClick={() => void chooseTheme(activeTheme, copies)}><RefreshCw />Retry QR generation</button>}
           </div>
         </section>
+      )}
+
+      {showQrModal && (
+        <div className="modal-backdrop qr-modal-backdrop" onClick={() => setShowQrModal(false)}>
+          <div
+            className="qr-modal-card"
+            onClick={event => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="qr-modal-heading"
+          >
+            <div className="qr-modal-header">
+              <div className="qr-modal-title-group">
+                <QrCode className="qr-modal-title-icon" />
+                <h2 id="qr-modal-heading">Scan to Download</h2>
+              </div>
+              <button
+                type="button"
+                className="close-btn qr-close-btn"
+                onClick={() => setShowQrModal(false)}
+                aria-label="Close modal"
+              >
+                <X />
+              </button>
+            </div>
+
+            <div className="qr-modal-body">
+              <div className="qr-code-frame">
+                {shareQr.current ? (
+                  <img src={shareQr.current} alt="QR Code to download photo strip" className="qr-code-image" />
+                ) : (
+                  <div className="qr-code-placeholder">Generating QR code...</div>
+                )}
+              </div>
+
+              <p className="qr-modal-instructions">
+                Scan with your phone camera to download your photo strip and animated live video.
+              </p>
+
+              <div className="qr-status-box">
+                {shareStatus === 'preparing' && (
+                  <div className="qr-progress-wrap" role="status">
+                    <div className="qr-progress-label">
+                      <span>Preparing high-res files & live video</span>
+                      <strong>{shareProgress ?? 20}%</strong>
+                    </div>
+                    <div className="qr-progress-bar" role="progressbar" aria-valuenow={shareProgress ?? 20} aria-valuemin={0} aria-valuemax={100}>
+                      <div className="qr-progress-fill" style={{ width: `${shareProgress ?? 20}%` }} />
+                    </div>
+                    <small className="qr-progress-tip">Your files are being uploaded to the cloud.</small>
+                  </div>
+                )}
+
+                {shareStatus === 'ready' && (
+                  <div className="qr-ready-badge" role="status">
+                    <Check className="badge-check-icon" />
+                    <span>Ready! Photos and live video are available on your phone.</span>
+                  </div>
+                )}
+
+                {shareStatus === 'error' && (
+                  <div className="qr-error-box" role="alert">
+                    <p>{shareError || 'Could not prepare online download.'}</p>
+                    <button
+                      type="button"
+                      className="secondary retry-btn"
+                      onClick={() => void prepareShare(true)}
+                    >
+                      <RefreshCw /> Retry
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {shareUrl.current && (
+                <div className="qr-link-row">
+                  <input
+                    type="text"
+                    readOnly
+                    value={shareUrl.current}
+                    className="qr-link-input"
+                    onClick={event => (event.target as HTMLInputElement).select()}
+                  />
+                  <button
+                    type="button"
+                    className="qr-copy-btn"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(shareUrl.current)
+                      setCopiedLink(true)
+                      setTimeout(() => setCopiedLink(false), 2000)
+                    }}
+                  >
+                    {copiedLink ? <Check /> : <Copy />}
+                    <span>{copiedLink ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="qr-modal-footer">
+              <button
+                type="button"
+                className="primary qr-modal-done-btn"
+                onClick={() => setShowQrModal(false)}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   )
 }
+
 
 function CaptureScreen({ timer, total, aspectRatio, onDone }: { timer: number; total: number; aspectRatio: number; onDone: (captures: CapturedMoment[]) => void }) {
   const video = useRef<HTMLVideoElement>(null)

@@ -60,6 +60,18 @@ async function shareMiddleware(request: IncomingMessage, response: ServerRespons
   const directory = resolve(shareRoot, id)
   const metadataPath = resolve(directory, 'metadata.json')
 
+  if (parts.length === 4 && parts[3] === 'scan') {
+    const scanFile = resolve(directory, 'scan.json')
+    if (request.method === 'POST') {
+      mkdirSync(directory, { recursive: true })
+      writeFileSync(scanFile, JSON.stringify({ scannedAt: new Date().toISOString() }))
+      return json(response, 200, { ok: true })
+    }
+    if (request.method === 'GET') {
+      return json(response, 200, { scanned: existsSync(scanFile) })
+    }
+  }
+
   if (request.method === 'POST' && parts.length === 3) {
     try {
       const payload = JSON.parse(await readBody(request)) as Record<string, unknown>

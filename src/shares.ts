@@ -240,3 +240,58 @@ export async function getShare(id: string): Promise<ShareData> {
   }
   return (await response.json()) as ShareData
 }
+
+export async function notifyShareScanned(id: string): Promise<void> {
+  if (!id) return
+
+  // Notify Supabase Cloud if configured
+  if (isSupabaseConfigured() && (typeof navigator === 'undefined' || navigator.onLine)) {
+    const client = getSupabaseClient()
+    if (client) {
+      try {
+        await client.from('settings').upsert({
+          booth_id: 'booth-01',
+          key: `scan:${id}`,
+          value: { id, scannedAt: new Date().toISOString() },
+        })
+      } catch (err) {
+        console.warn('Supabase notifyShareScanned error:', err)
+      }
+    }
+  }
+
+  // Also ping local dev server if available
+  try {
+    await fetch(`/api/shares/${id}/scan`, { method: 'POST' })
+  } catch {}
+}
+
+export async function checkShareScanned(id: string): Promise<boolean> {
+  if (!id) return false
+
+  // Check Supabase Cloud if configured
+  if (isSupabaseConfigured() && (typeof navigator === 'undefined' || navigator.onLine)) {
+    const client = getSupabaseClient()
+    if (client) {
+      try {
+        const { data } = await client
+          .from('settings')
+          .select('key')
+          .eq('key', `scan:${id}`)
+          .maybeSingle()
+        if (data) return true
+      } catch {}
+    }
+  }
+
+  // Check local dev server fallback
+  try {
+    const res = await fetch(`/api/shares/${id}/scan`, { cache: 'no-store' })
+    if (res.ok) {
+      const data = (await res.json()) as { scanned?: boolean }
+      return Boolean(data?.scanned)
+    }
+  } catch {}
+  return false
+}
+
