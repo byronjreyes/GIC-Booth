@@ -6,6 +6,8 @@ export type Layout = {
     | 'grid-4'
     | 'tight-4'
     | 'tight-3'
+    | 'clean-4'
+    | 'clean-3'
     | 'landscape-3'
     | 'landscape-4'
     | 'wide-4'
@@ -32,6 +34,7 @@ export type StripText = {
   title: string
   showBrand: boolean
   qrCode?: string
+  showTitle?: boolean
 }
 
 export type PhotoFilter = 'none' | 'bw' | 'warm' | 'vintage' | 'cool' | 'soft'
@@ -89,55 +92,74 @@ export function getCanvasFilter(filter: PhotoFilter): string {
   }
 }
 
-export function getPhotoRegions(layout: Layout): Array<{ x: number; y: number; width: number; height: number }> {
+export function getTextFlags(text?: Partial<StripText>) {
+  if (!text) {
+    return { hasTitle: true, hasFooter: true }
+  }
+  const hasTitle = text.showTitle !== false && Boolean(text.title?.trim())
+  const hasFooter = Boolean(text.showBrand)
+  return { hasTitle, hasFooter }
+}
+
+export function getPhotoRegions(layout: Layout, text?: Partial<StripText>): Array<{ x: number; y: number; width: number; height: number }> {
+  const { hasTitle, hasFooter } = getTextFlags(text)
+
+  // 1. Grid 4 (2x2 Grid)
   if (layout.id === 'grid-4') {
+    const effectiveTop = hasTitle ? TOP : SIDE
+    const effectiveBottom = hasFooter ? BOTTOM : SIDE
     const colW = (WIDTH - SIDE * 2 - GAP) / 2
-    const rowH = (HEIGHT - TOP - BOTTOM - GAP) / 2
+    const rowH = (HEIGHT - effectiveTop - effectiveBottom - GAP) / 2
     return [
-      { x: SIDE, y: TOP, width: colW, height: rowH },
-      { x: SIDE + colW + GAP, y: TOP, width: colW, height: rowH },
-      { x: SIDE, y: TOP + rowH + GAP, width: colW, height: rowH },
-      { x: SIDE + colW + GAP, y: TOP + rowH + GAP, width: colW, height: rowH },
+      { x: SIDE, y: effectiveTop, width: colW, height: rowH },
+      { x: SIDE + colW + GAP, y: effectiveTop, width: colW, height: rowH },
+      { x: SIDE, y: effectiveTop + rowH + GAP, width: colW, height: rowH },
+      { x: SIDE + colW + GAP, y: effectiveTop + rowH + GAP, width: colW, height: rowH },
     ]
   }
 
-  // 1. Tight 4 Cut (Minimal hairline spacing 4 cut - 2x6 strip)
-  if (layout.id === 'tight-4') {
-    const tightSide = 26
+  // 2. Clean 4 Cut & Tight 4 Cut (Minimal spacing 4 cut - 2x6 strip)
+  if (layout.id === 'clean-4' || layout.id === 'tight-4') {
+    const tightSide = layout.id === 'clean-4' ? 32 : 26
     const tightGap = 8
-    const tightTop = 94
-    const photoWidth = WIDTH - tightSide * 2 // 548
-    const photoHeight = 362
+    const photoWidth = WIDTH - tightSide * 2 // 536 or 548
+    const topMargin = hasTitle ? 94 : tightSide
+    const bottomMargin = hasFooter ? 234 : tightSide
+    const availableHeight = HEIGHT - topMargin - bottomMargin - tightGap * 3
+    const photoHeight = Math.floor(availableHeight / 4)
     return Array.from({ length: 4 }, (_, index) => ({
       x: tightSide,
-      y: tightTop + index * (photoHeight + tightGap),
+      y: topMargin + index * (photoHeight + tightGap),
       width: photoWidth,
       height: photoHeight,
     }))
   }
 
-  // 2. Tight 3 Cut (Minimal hairline spacing 3 cut - 2x6 strip)
-  if (layout.id === 'tight-3') {
-    const tightSide = 26
+  // 3. Clean 3 Cut & Tight 3 Cut (Minimal spacing 3 cut - 2x6 strip)
+  if (layout.id === 'clean-3' || layout.id === 'tight-3') {
+    const tightSide = layout.id === 'clean-3' ? 32 : 26
     const tightGap = 8
-    const tightTop = 96
-    const photoWidth = WIDTH - tightSide * 2 // 548
-    const photoHeight = 418
+    const photoWidth = WIDTH - tightSide * 2 // 536 or 548
+    const topMargin = hasTitle ? 96 : tightSide
+    const bottomMargin = hasFooter ? 434 : tightSide
+    const availableHeight = HEIGHT - topMargin - bottomMargin - tightGap * 2
+    const photoHeight = Math.floor(availableHeight / 3)
     return Array.from({ length: 3 }, (_, index) => ({
       x: tightSide,
-      y: tightTop + index * (photoHeight + tightGap),
+      y: topMargin + index * (photoHeight + tightGap),
       width: photoWidth,
       height: photoHeight,
     }))
   }
 
-  // 3. Landscape 3 Cut (Horizontal 6x2 strip)
+  // 4. Landscape 3 Cut (Horizontal 6x2 strip)
   if (layout.id === 'landscape-3') {
     const leftMargin = 36
     const gap = 8
-    const photoWidth = 450
-    const photoHeight = 400
-    const photoY = 100
+    const photoY = hasTitle ? 100 : 70
+    const photoHeight = hasTitle ? 400 : 460
+    const rightMargin = (!hasFooter && !hasTitle) ? leftMargin : 394
+    const photoWidth = Math.floor((1800 - leftMargin - rightMargin - gap * 2) / 3)
     return Array.from({ length: 3 }, (_, index) => ({
       x: leftMargin + index * (photoWidth + gap),
       y: photoY,
@@ -146,13 +168,14 @@ export function getPhotoRegions(layout: Layout): Array<{ x: number; y: number; w
     }))
   }
 
-  // 4. Landscape 4 Cut (Horizontal 6x2 strip)
+  // 5. Landscape 4 Cut (Horizontal 6x2 strip)
   if (layout.id === 'landscape-4') {
     const leftMargin = 30
     const gap = 8
-    const photoWidth = 336
-    const photoHeight = 400
-    const photoY = 100
+    const photoY = hasTitle ? 100 : 70
+    const photoHeight = hasTitle ? 400 : 460
+    const rightMargin = (!hasFooter && !hasTitle) ? leftMargin : 394
+    const photoWidth = Math.floor((1800 - leftMargin - rightMargin - gap * 3) / 4)
     return Array.from({ length: 4 }, (_, index) => ({
       x: leftMargin + index * (photoWidth + gap),
       y: photoY,
@@ -161,23 +184,25 @@ export function getPhotoRegions(layout: Layout): Array<{ x: number; y: number; w
     }))
   }
 
+  // 6. Classic layouts (classic-4, classic-3, classic-2)
   const count = layout.requiredPhotos
-  const photoHeight = (HEIGHT - TOP - BOTTOM - GAP * (count - 1)) / count
+  const effectiveTop = hasTitle ? TOP : SIDE
+  const effectiveBottom = hasFooter ? BOTTOM : SIDE
+  const photoHeight = (HEIGHT - effectiveTop - effectiveBottom - GAP * (count - 1)) / count
   return Array.from({ length: count }, (_, index) => ({
     x: SIDE,
-    y: TOP + index * (photoHeight + GAP),
+    y: effectiveTop + index * (photoHeight + GAP),
     width: WIDTH - SIDE * 2,
     height: photoHeight,
   }))
 }
 
-export function getPhotoAspectRatio(layout: Layout): number {
+export function getPhotoAspectRatio(layout: Layout, text?: Partial<StripText>): number {
   if (layout.id === 'grid-4') {
-    const colW = (WIDTH - SIDE * 2 - GAP) / 2
-    const rowH = (HEIGHT - TOP - BOTTOM - GAP) / 2
-    return colW / rowH
+    const regions = getPhotoRegions(layout, text)
+    return regions[0].width / regions[0].height
   }
-  const regions = getPhotoRegions(layout)
+  const regions = getPhotoRegions(layout, text)
   return regions[0].width / regions[0].height
 }
 
@@ -212,8 +237,9 @@ function drawPhotos(
   filter: PhotoFilter = 'none',
   offsetX = 0,
   offsetY = 0,
+  text?: Partial<StripText>,
 ) {
-  const regions = getPhotoRegions(layout)
+  const regions = getPhotoRegions(layout, text)
   images.forEach((image, index) => {
     const region = regions[index]
     if (!region) return
@@ -276,9 +302,11 @@ function drawText(
   offsetY = 0,
   layout?: Layout,
 ) {
+  const { hasTitle } = getTextFlags(text)
+  if (!hasTitle) return
   const isLandscape = layout?.orientation === 'landscape' || layout?.id.startsWith('landscape')
   if (!isLandscape) {
-    const isTight = layout?.id.startsWith('tight')
+    const isTight = layout?.id.startsWith('tight') || layout?.id.startsWith('clean')
     const textY = isTight ? 64 : 84
     ctx.fillStyle = ink
     ctx.textAlign = 'center'
@@ -302,9 +330,11 @@ async function drawFooter(
   offsetY = 0,
   layout?: Layout,
 ) {
+  const { hasFooter } = getTextFlags(text)
+  if (!hasFooter) return
   const isLandscape = layout?.orientation === 'landscape' || layout?.id.startsWith('landscape')
   if (!isLandscape) {
-    const isTight = layout?.id.startsWith('tight')
+    const isTight = layout?.id.startsWith('tight') || layout?.id.startsWith('clean')
     const sideMargin = isTight ? 26 : SIDE
     const qrSize = 92
     const qrY = isTight ? HEIGHT - 165 : HEIGHT - 150
@@ -355,7 +385,7 @@ export async function renderStrip(
   canvas.height = H
   const ctx = canvas.getContext('2d')!
   const ink = readableTextColor(theme.background)
-  if (theme.singleTemplate && !isLandscape) {
+  if (theme.singleTemplate && !isLandscape && !layout.id.startsWith('clean-')) {
     ctx.drawImage(await loadImage(theme.singleTemplate), 0, 0, W, H)
   } else {
     ctx.fillStyle = theme.background
@@ -363,7 +393,7 @@ export async function renderStrip(
   }
 
   const images = await Promise.all(photos.slice(0, layout.requiredPhotos).map(loadImage))
-  drawPhotos(ctx, images, theme.background, layout, customization.filter || 'none')
+  drawPhotos(ctx, images, theme.background, layout, customization.filter || 'none', 0, 0, text)
 
   // Draw decorations (doodles & stickers)
   if (customization.stickers?.length || customization.doodles?.length) {
@@ -375,14 +405,17 @@ export async function renderStrip(
     ctx.drawImage(frame, 0, 0, W, H)
   }
 
-  if (!theme.frame && (!theme.singleTemplate || isLandscape)) {
-    ctx.fillStyle = theme.accent
-    if (!isLandscape) {
-      ctx.fillRect(0, 0, W, 26)
-      ctx.fillRect(0, H - 22, W, 22)
-    } else {
-      ctx.fillRect(0, 0, W, 18)
-      ctx.fillRect(0, H - 18, W, 18)
+  const { hasTitle, hasFooter } = getTextFlags(text)
+  if (!theme.frame && (!theme.singleTemplate || isLandscape || layout.id.startsWith('clean-'))) {
+    if (hasTitle || hasFooter) {
+      ctx.fillStyle = theme.accent
+      if (!isLandscape) {
+        if (hasTitle) ctx.fillRect(0, 0, W, 26)
+        if (hasFooter) ctx.fillRect(0, H - 22, W, 22)
+      } else {
+        ctx.fillRect(0, 0, W, 18)
+        ctx.fillRect(0, H - 18, W, 18)
+      }
     }
     drawText(ctx, ink, text, 0, 0, layout)
   }
@@ -400,7 +433,7 @@ export async function renderThemedPrintCanvas(
   customization: CustomizationOptions = {},
 ) {
   const isLandscape = layout.orientation === 'landscape' || layout.id.startsWith('landscape')
-  if (copies === 1 || !theme.doubleTemplate || isLandscape) {
+  if (copies === 1 || !theme.doubleTemplate || isLandscape || layout.id.startsWith('clean-')) {
     return renderPrintCanvas(await renderStrip(layout, theme, photos, text, customization), copies, layout)
   }
 
@@ -412,8 +445,8 @@ export async function renderThemedPrintCanvas(
   const images = await Promise.all(photos.slice(0, layout.requiredPhotos).map(loadImage))
   const ink = readableTextColor(theme.background)
 
-  drawPhotos(ctx, images, theme.background, layout, customization.filter || 'none')
-  drawPhotos(ctx, images, theme.background, layout, customization.filter || 'none', WIDTH)
+  drawPhotos(ctx, images, theme.background, layout, customization.filter || 'none', 0, 0, text)
+  drawPhotos(ctx, images, theme.background, layout, customization.filter || 'none', WIDTH, 0, text)
 
   // Draw decorations (doodles & stickers) on both sides of 4x6 sheet
   if (customization.stickers?.length || customization.doodles?.length) {
@@ -600,8 +633,9 @@ function drawLivePhotos(
   filter: PhotoFilter = 'none',
   offsetX = 0,
   offsetY = 0,
+  text?: Partial<StripText>,
 ) {
-  const regions = getPhotoRegions(layout)
+  const regions = getPhotoRegions(layout, text)
   clips.forEach((clip, index) => {
     if (!clip) return
     const region = regions[index]
@@ -647,7 +681,7 @@ export async function renderLiveStripVideos(
 
   const drawSingle = () => {
     singleContext.drawImage(singleBase, 0, 0, W, H)
-    drawLivePhotos(singleContext, layout, clips, customization.filter || 'none')
+    drawLivePhotos(singleContext, layout, clips, customization.filter || 'none', 0, 0, text)
     if (customization.stickers?.length || customization.doodles?.length) {
       drawDecorations(singleContext, customization.stickers, customization.doodles)
     }
@@ -657,8 +691,8 @@ export async function renderLiveStripVideos(
   const drawDouble = () => {
     if (!isLandscape) {
       doubleContext.drawImage(doubleBase!, 0, 0, W * 2, H)
-      drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none')
-      drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none', W)
+      drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none', 0, 0, text)
+      drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none', W, 0, text)
       if (customization.stickers?.length || customization.doodles?.length) {
         drawDecorations(doubleContext, customization.stickers, customization.doodles)
         drawDecorations(doubleContext, customization.stickers, customization.doodles, W)
@@ -670,8 +704,8 @@ export async function renderLiveStripVideos(
     } else {
       doubleContext.drawImage(singleBase, 0, 0, W, H)
       doubleContext.drawImage(singleBase, 0, H, W, H)
-      drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none', 0, 0)
-      drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none', 0, H)
+      drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none', 0, 0, text)
+      drawLivePhotos(doubleContext, layout, clips, customization.filter || 'none', 0, H, text)
       if (customization.stickers?.length || customization.doodles?.length) {
         drawDecorations(doubleContext, customization.stickers, customization.doodles, 0, 0)
         drawDecorations(doubleContext, customization.stickers, customization.doodles, 0, H)

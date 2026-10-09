@@ -33,6 +33,7 @@ import {
   type Layout,
   type PhotoFilter,
   type PlacedSticker,
+  type StripText,
   type Theme,
 } from './compositor'
 import {
@@ -54,8 +55,10 @@ type CapturedMoment = { photo: string; clip: Blob | null; mirrored: boolean }
 const layouts: Layout[] = [
   { id: 'classic-4', name: 'Classic 4 Cut', requiredPhotos: 4, description: '4 moments · 2 × 6 in' },
   { id: 'tight-4', name: 'Minimal 4 Cut', requiredPhotos: 4, description: '4 moments · little spaces · 2 × 6 in', orientation: 'portrait' },
+  { id: 'clean-4', name: 'Border 4 Cut', requiredPhotos: 4, description: '4 moments · border only · no text · 2 × 6 in', orientation: 'portrait' },
   { id: 'classic-3', name: 'Classic 3 Cut', requiredPhotos: 3, description: '3 moments · 2 × 6 in' },
   { id: 'tight-3', name: 'Minimal 3 Cut', requiredPhotos: 3, description: '3 moments · little spaces · 2 × 6 in', orientation: 'portrait' },
+  { id: 'clean-3', name: 'Border 3 Cut', requiredPhotos: 3, description: '3 moments · border only · no text · 2 × 6 in', orientation: 'portrait' },
   { id: 'classic-2', name: 'Classic 2 Cut', requiredPhotos: 2, description: '2 large moments · 2 × 6 in' },
   { id: 'landscape-3', name: 'Landscape 3 Cut', requiredPhotos: 3, description: '3 moments · horizontal · 6 × 2 in', orientation: 'landscape' },
   { id: 'landscape-4', name: 'Landscape 4 Cut', requiredPhotos: 4, description: '4 moments · horizontal · 6 × 2 in', orientation: 'landscape' },
@@ -76,9 +79,10 @@ const templateThemes: Theme[] = Array.from({ length: 9 }, (_, index) => {
 })
 
 const colorThemes: Theme[] = [
+  { id: 'color-white', name: 'Studio White', background: '#ffffff', accent: '#171717', category: 'Colors' },
+  { id: 'color-black', name: 'Night Print', background: '#171717', accent: '#171717', category: 'Colors' },
   { id: 'color-red', name: 'Proof Red', background: '#e43d30', accent: '#e43d30', category: 'Colors' },
   { id: 'color-blue', name: 'Studio Blue', background: '#2464c6', accent: '#2464c6', category: 'Colors' },
-  { id: 'color-black', name: 'Night Print', background: '#171717', accent: '#171717', category: 'Colors' },
   { id: 'color-green', name: 'Mint Contact', background: '#2f8f70', accent: '#2f8f70', category: 'Colors' },
   { id: 'color-pink', name: 'Pop Pink', background: '#cb5aa2', accent: '#cb5aa2', category: 'Colors' },
   { id: 'color-violet', name: 'Violet Flash', background: '#724fb5', accent: '#724fb5', category: 'Colors' },
@@ -138,6 +142,13 @@ function StripDiagram({ layout }: { layout: Layout }) {
       </div>
     )
   }
+  if (layout.id.startsWith('clean-')) {
+    return (
+      <div className="strip-diagram clean">
+        {Array.from({ length: layout.requiredPhotos }, (_, index) => <i key={index} />)}
+      </div>
+    )
+  }
   if (layout.id.startsWith('tight-')) {
     return (
       <div className="strip-diagram tight">
@@ -174,6 +185,7 @@ function App() {
   const [stripTitle, setStripTitle] = useState(() => currentSettings.current.brandTitle || 'GIC BOOTH')
   const [hasPrinted, setHasPrinted] = useState(false)
   const [showBrand, setShowBrand] = useState(true)
+  const [showTitle, setShowTitle] = useState(true)
 
   // Phase 3 Customization States
   const [customTab, setCustomTab] = useState<CustomTab>('themes')
@@ -202,7 +214,7 @@ function App() {
   const latestDesignRef = useRef<{
     theme: Theme
     chosenPhotos: string[]
-    text: { title: string; showBrand: boolean; qrCode: string }
+    text: StripText
     customization: CustomizationOptions
     preview: string
     doublePrint: string
@@ -338,6 +350,7 @@ function App() {
     setActiveTheme(null)
     setStripTitle(currentSettings.current.brandTitle || 'GIC BOOTH')
     setShowBrand(true)
+    setShowTitle(true)
     setSelectedFilter('none')
     setStickers([])
     setDoodles([])
@@ -414,6 +427,7 @@ function App() {
     currentStickers = stickers,
     currentDoodles = doodles,
     debounceVideoMs = 0,
+    titleEnabled = showTitle,
   ) => {
     const version = ++renderVersion.current
     const revision = createId()
@@ -440,7 +454,7 @@ function App() {
       shareUrl.current = url
       shareQr.current = await QRCode.toDataURL(url, { width: 320, margin: 2 })
     }
-    const text = { title, showBrand: brand, qrCode: shareQr.current }
+    const text: StripText = { title, showTitle: titleEnabled, showBrand: brand, qrCode: shareQr.current }
     const customization: CustomizationOptions = {
       filter,
       stickers: currentStickers,
@@ -654,7 +668,7 @@ function App() {
     setActiveTheme(theme)
     track('theme_selected', { theme: theme.id })
     try {
-      if (!await composeResult(theme, stripTitle, showBrand, nextCopies, selectedFilter, stickers, doodles, step === 'result' ? 1200 : 0)) return
+      if (!await composeResult(theme, stripTitle, showBrand, nextCopies, selectedFilter, stickers, doodles, step === 'result' ? 1200 : 0, showTitle)) return
       track('strip_generated', { layout: layout.id, theme: theme.id })
       setStep('result')
     } catch {
@@ -667,10 +681,11 @@ function App() {
     setResult(nextCopies === 1 ? singlePrint : doublePrint)
   }
 
-  const customizeStrip = (title: string, brand: boolean) => {
+  const customizeStrip = (title: string, brand: boolean, titleEnabled = showTitle) => {
     setStripTitle(title)
     setShowBrand(brand)
-    if (activeTheme) void composeResult(activeTheme, title, brand, copies, selectedFilter, stickers, doodles, 1200).catch(() => setError('The strip could not be updated.'))
+    setShowTitle(titleEnabled)
+    if (activeTheme) void composeResult(activeTheme, title, brand, copies, selectedFilter, stickers, doodles, 1200, titleEnabled).catch(() => setError('The strip could not be updated.'))
   }
 
   const handleFilterChange = (filter: PhotoFilter) => {
@@ -1007,7 +1022,14 @@ function App() {
     : timers
 
   // Theme categories
-  const themeCategories = ['All', ...new Set(availableThemes.map(t => t.category || 'Custom'))]
+  const themeCategories = [
+    'All',
+    ...new Set(
+      availableThemes
+        .filter(t => !layout.id.startsWith('clean-') || t.category !== 'Templates')
+        .map(t => t.category || 'Custom')
+    ),
+  ]
 
   return (
     <main className={`app step-${step}`}>
@@ -1042,12 +1064,28 @@ function App() {
 
       {step === 'layout' && (
         <section className="screen selection-screen">
-          <header><h1>How many moments?</h1></header>
+          <header><h1>How many <em>moments?</em></h1></header>
           <div className="layout-options">
             {layouts.map(item => (
-              <button key={item.id} className="layout-option" onClick={() => { track('layout_selected', { layout: item.id }); setLayout(item); setStep('timer') }}>
-                <StripDiagram layout={item} />
+              <button
+                key={item.id}
+                className="layout-option"
+                onClick={() => {
+                  track('layout_selected', { layout: item.id })
+                  setLayout(item)
+                  if (item.id.startsWith('clean-')) {
+                    setShowTitle(false)
+                    setShowBrand(false)
+                  } else {
+                    setShowTitle(true)
+                    setShowBrand(true)
+                  }
+                  setStep('timer')
+                }}
+              >
+                <div className="layout-proof" aria-hidden="true"><StripDiagram layout={item} /></div>
                 <span><strong>{item.name}</strong><small>{item.description || `${item.requiredPhotos} photos`}</small></span>
+                <ArrowLeft className="layout-arrow" aria-hidden="true" />
               </button>
             ))}
           </div>
@@ -1072,7 +1110,7 @@ function App() {
         <CaptureScreen
           timer={timer}
           total={layout.requiredPhotos + extraCount}
-          aspectRatio={getPhotoAspectRatio(layout)}
+          aspectRatio={getPhotoAspectRatio(layout, { showTitle, showBrand, title: stripTitle })}
           onDone={(captures) => { track('capture_completed', { count: captures.length }); setPhotos(captures.map(capture => capture.photo)); setClips(captures.map(capture => ({ blob: capture.clip, mirrored: capture.mirrored }))); setSelected([]); setStep('photos') }}
         />
       )}
@@ -1085,7 +1123,7 @@ function App() {
               const active = selected.includes(index)
               return (
                 <div className={`photo-choice ${active ? 'selected' : ''}`} key={index}>
-                  <button style={{ aspectRatio: getPhotoAspectRatio(layout) }} className={active ? 'selected' : ''} onClick={() => togglePhoto(index)} aria-pressed={active}>
+                  <button style={{ aspectRatio: getPhotoAspectRatio(layout, { showTitle, showBrand, title: stripTitle }) }} className={active ? 'selected' : ''} onClick={() => togglePhoto(index)} aria-pressed={active}>
                     <img src={photo} alt={`Capture ${index + 1}`} />
                   </button>
                   <span>Photo {index + 1}</span>
@@ -1095,7 +1133,16 @@ function App() {
           </div>
           <footer className="action-bar">
             <strong>Selected {selected.length} / {layout.requiredPhotos}</strong>
-            <button className="primary" disabled={selected.length !== layout.requiredPhotos} onClick={() => void chooseTheme(templateThemes[0])}>Next</button>
+            <button
+              className="primary"
+              disabled={selected.length !== layout.requiredPhotos}
+              onClick={() => {
+                const defaultTheme = layout.id.startsWith('clean-') ? colorThemes[0] : templateThemes[0]
+                void chooseTheme(defaultTheme)
+              }}
+            >
+              Next
+            </button>
           </footer>
         </section>
       )}
@@ -1132,6 +1179,7 @@ function App() {
                   <div className="result-theme-swatches" role="group" aria-label="Choose theme">
                     {availableThemes
                       .filter(theme => !theme.layoutId || theme.layoutId === layout.id)
+                      .filter(theme => !layout.id.startsWith('clean-') || theme.category !== 'Templates')
                       .filter(theme => themeCategory === 'All' || theme.category === themeCategory)
                       .map(theme => (
                         <button
@@ -1391,8 +1439,34 @@ function App() {
           <img className="print-canvas" src={result} alt="" aria-hidden="true" />
           <div className="result-actions">
             <div className="strip-customization">
-              <label>Strip title<input type="text" maxLength={30} value={stripTitle} onChange={event => customizeStrip(event.target.value, showBrand)} /></label>
-              <label className="brand-option"><input type="checkbox" checked={showBrand} onChange={event => customizeStrip(stripTitle, event.target.checked)} />Show KODAKEI brand</label>
+              <label className="brand-option">
+                <input
+                  type="checkbox"
+                  checked={showTitle}
+                  onChange={event => customizeStrip(stripTitle, showBrand, event.target.checked)}
+                />
+                Show title header
+              </label>
+              {showTitle && (
+                <label className="title-input-label">
+                  Strip title
+                  <input
+                    type="text"
+                    maxLength={30}
+                    value={stripTitle}
+                    onChange={event => customizeStrip(event.target.value, showBrand, showTitle)}
+                    placeholder="Enter strip title"
+                  />
+                </label>
+              )}
+              <label className="brand-option">
+                <input
+                  type="checkbox"
+                  checked={showBrand}
+                  onChange={event => customizeStrip(stripTitle, event.target.checked, showTitle)}
+                />
+                Show KODAKEI brand &amp; footer
+              </label>
             </div>
             <div className="print-options">
               <span><strong>4×6 print</strong><small>1200 × 1800 · 300 DPI</small></span>
